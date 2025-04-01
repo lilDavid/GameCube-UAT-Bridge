@@ -150,6 +150,9 @@ const UAT_PROTOCOL_VERSION: i32 = 0;
 
 const GCN_GAME_ID_ADDRESS: u32 = 0x80000000;
 
+const PRIME_GAME_STATE_ADDRESS: u32 = 0x805A8C40;
+const PRIME_WORLD_OFFSET: i32 = 0x84;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut argv = env::args();
     argv.next();  // Consume argv[0]
@@ -161,11 +164,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     request_meta_info(&mut nintendont_socket)?;
 
-    let result = read_memory(&mut nintendont_socket, &[GCN_GAME_ID_ADDRESS, GCN_GAME_ID_ADDRESS + 4, 0x805A8C40 + 0x84])?;
+    let result = read_memory(&mut nintendont_socket, &[GCN_GAME_ID_ADDRESS, GCN_GAME_ID_ADDRESS + 4])?;
     let game_id = String::from_utf8(result[0..6].into())?;
     let game_revision = result[7];
     println!(">> Game ID: {}", game_id);
     println!(">> Revision: {}", game_revision);
+
+    let result = read_memory(&mut nintendont_socket, &[PRIME_GAME_STATE_ADDRESS])?;
+    let address = u32::from_be_bytes([result[0], result[1], result[2], result[3]]);
+    let result = read_memory(&mut nintendont_socket, &[address + PRIME_WORLD_OFFSET as u32])?;
+    let world = u32::from_be_bytes([result[0], result[1], result[2], result[3]]);
+    println!(">> Game world: {}", world);
 
     let uat_server = websocket::server::sync::Server::bind((Ipv4Addr::LOCALHOST, UAT_PORT_MAIN))?;
     for connection in uat_server.filter_map(Result::ok) {
@@ -199,7 +208,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         todo!();
                     }
 
-                    let response = json::stringify(array![]);
+                    let response = json::stringify(array![object!{
+                        cmd: "Var",
+                        name: "world",
+                        value: world,
+                    }]);
                     client.send_message(&Message::text(response)).expect("Could not send message");
                 }
             }
