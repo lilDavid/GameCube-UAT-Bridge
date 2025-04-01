@@ -1,10 +1,12 @@
 mod connector;
 mod gamecube;
+mod game_interface;
 mod uat;
 
 use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
 
 use connector::GameCubeConnector;
+use game_interface::{GameCubeInterface, VariableDefinition, VariableType};
 use gamecube::{GCN_GAME_ID_ADDRESS, PRIME_GAME_STATE_ADDRESS, PRIME_WORLD_OFFSET};
 use uat::{command::{ClientCommand, ServerCommand}, variable::{Variable, VariableStore}, MessageResponse, Server};
 use websocket::WebSocketError;
@@ -21,19 +23,33 @@ struct VariableWatch {
 }
 
 #[cfg(target_os = "windows")]
-fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector>, &'static str> {
-    loop {
+fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send>, &'static str> {
+    let result = loop {
         println!("Connecting to Dolphin...");
         match DolphinConnector::new() {
             Ok(dolphin) => break Ok(Box::new(dolphin)),
             Err(err) => eprintln!("{}", err),
         }
-    }
+    };
+    println!("Connected");
+    result
 }
 
 #[cfg(not(target_os = "windows"))]
-fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector>, &'static str> {
+fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send>, &'static str> {
     Err("Dolphin is not supported on this platform")
+}
+
+fn get_nintendont_connector(address: &str) -> Box<dyn GameCubeConnector + Send> {
+    println!("Connecting to Nintendont at {}...", address);
+    let result = loop {
+        match NintendontConnector::new(IpAddr::from_str(address).unwrap()) {
+            Ok(nintendont) => break Box::new(nintendont),
+            Err(err) => eprintln!("{}", err),
+        }
+    };
+    println!("Connected");
+    result
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -42,8 +58,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let target = argv.next().expect("Need IP Address or to specify Dolphin");
 
+    let mut connector: Box<dyn GameCubeConnector + Send> = if target.to_lowercase() == "dolphin" {
+        get_dolphin_connector().unwrap()
+    } else {
+        get_nintendont_connector(&target)
+    };
+
+    let game_id = String::from_utf8(connector.read_address(6, GCN_GAME_ID_ADDRESS).unwrap()).unwrap();
+    println!(">> Game ID: {}", game_id);
+    let game_revision = connector.read_address(1, GCN_GAME_ID_ADDRESS + 6).unwrap()[0];
+    println!(">> Revision: {}", game_revision);
+
+    let mut interface = GameCubeInterface::new(
+        connector,
+        vec![VariableDefinition::new("world", VariableType::U32, PRIME_GAME_STATE_ADDRESS, &[PRIME_WORLD_OFFSET])]
+    );
     let mut variable_store = VariableStore::new();
-    variable_store.register_variable("world")?;
+    for variable in interface.variable_definitions() {
+        variable_store.register_variable(variable.name()).ok();
+    }
+
+    let game_info = vec![ServerCommand::info("Metroid Prime", Some("0-00"))];
 
     let client_message_channels: Arc<Mutex<Vec<Sender<Vec<VariableWatch>>>>> = Arc::new(Mutex::new(Vec::new()));
     let channels = Arc::clone(&client_message_channels);
@@ -52,42 +87,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     thread::spawn(move || {
         let client_message_channels = channels;
         let variable_store = variables;
-        let mut connector: Box<dyn GameCubeConnector> = {
-            if target.to_lowercase() == "dolphin" {
-                get_dolphin_connector().unwrap()
-            } else {
-                println!("Connecting to Nintendont at {}...", target);
-                loop {
-                    match NintendontConnector::new(IpAddr::from_str(&target).unwrap()) {
-                        Ok(nintendont) => break Box::new(nintendont),
-                        Err(err) => eprintln!("{}", err),
-                    }
-                }
-            }
-        };
-        println!("Connected");
-
-        let game_id = String::from_utf8(connector.read_address(6, GCN_GAME_ID_ADDRESS).unwrap()).unwrap();
-        println!(">> Game ID: {}", game_id);
-        let game_revision = String::from_utf8(connector.read_address(1, GCN_GAME_ID_ADDRESS + 6).unwrap()).unwrap();
-        println!(">> Revision: {}", game_revision);
 
         loop {
             let changes = {
-                let mut changes = vec![];
                 let mut variables = variable_store.lock().unwrap();
-                let world = connector.read_pointers(4, PRIME_GAME_STATE_ADDRESS, &[PRIME_WORLD_OFFSET])
-                    .ok()
-                    .map(|result| u32::from_be_bytes([result[0], result[1], result[2], result[3]]));
-                if variables.update_variable("world", world).unwrap() {
-                    if let Some(world) = world {
-                        println!(">> Game world: {}", world);
-                    } else {
-                        println!(">> Game world: None");
-                    }
-                    changes.push(VariableWatch { name: "world".to_owned(), value: world.clone() });
-                }
-                changes
+                interface.read_variables()
+                    .filter_map(|(name, value)| match variables.update_variable(name, value).unwrap() {
+                        true => Some(VariableWatch { name: name.to_owned(), value: value.clone() }),
+                        false => None
+                    })
+                    .collect::<Vec<_>>()
             };
 
             for channel in client_message_channels.lock().unwrap().iter() {
@@ -105,14 +114,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let (item_sender, item_receiver) = channel();
         client_message_channels.lock().unwrap().push(item_sender);
 
+        let info = game_info.clone();
         thread::spawn(move || {
-            let info = vec![ServerCommand::info("Metroid Prime", Some("0-00"))];
             socket_writer.send(&info).unwrap();
 
             let socket_writer = Arc::new(Mutex::new(socket_writer));
             let writer = Arc::clone(&socket_writer);
             thread::spawn(move || {
-                let writer = writer;
                 for received in item_receiver {
                     let message = received.into_iter().map(|watch| ServerCommand::var(&watch.name, watch.value)).collect::<Vec::<_>>();
                     if let Err(WebSocketError::IoError(err)) = writer.lock().unwrap().send(&message) {
