@@ -1,4 +1,7 @@
-use std::{env, error::Error, fmt::{Debug, Display, Write}, io::{self, Read, Write as _}, net::TcpStream, num::TryFromIntError};
+use std::{env, error::Error, fmt::{Debug, Display, Write}, io::{self, Read, Write as _}, net::{Ipv4Addr, TcpStream}, num::TryFromIntError, thread};
+
+use json::{array, object, JsonValue};
+use websocket::{Message, OwnedMessage};
 
 struct Op {
     address_index: u8,
@@ -140,7 +143,10 @@ fn read_memory(socket: &mut TcpStream, ops: &[u32]) -> Result<Vec<u8>, SendSocke
     send_socket(socket, ops, &addresses)
 }
 
-const PORT: u16 = 43673;
+const NINTENDONT_PORT: u16 = 43673;
+
+const UAT_PORT_MAIN: u16 = 65399;
+const UAT_PROTOCOL_VERSION: i32 = 0;
 
 const GCN_GAME_ID_ADDRESS: u32 = 0x80000000;
 
@@ -150,16 +156,55 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let address = argv.next().expect("Need IP address");
     println!("Connecting to Nintendont at {}...", address);
-    let mut stream = TcpStream::connect((address, PORT))?;
+    let mut nintendont_socket = TcpStream::connect((address, NINTENDONT_PORT))?;
     println!("Connected");
 
-    request_meta_info(&mut stream)?;
+    request_meta_info(&mut nintendont_socket)?;
 
-    let result = read_memory(&mut stream, &[GCN_GAME_ID_ADDRESS, GCN_GAME_ID_ADDRESS + 4])?;
+    let result = read_memory(&mut nintendont_socket, &[GCN_GAME_ID_ADDRESS, GCN_GAME_ID_ADDRESS + 4, 0x805A8C40 + 0x84])?;
     let game_id = String::from_utf8(result[0..6].into())?;
     let game_revision = result[7];
     println!(">> Game ID: {}", game_id);
     println!(">> Revision: {}", game_revision);
+
+    let uat_server = websocket::server::sync::Server::bind((Ipv4Addr::LOCALHOST, UAT_PORT_MAIN))?;
+    for connection in uat_server.filter_map(Result::ok) {
+        thread::spawn(move || {
+            let mut client = connection.accept().unwrap();
+
+            client.send_message(&Message::text(json::stringify(array![object!{
+                cmd: "Info",
+                protocol: UAT_PROTOCOL_VERSION,
+                name: "Metroid Prime",
+                version: "0-00",
+                features: array![],
+                slots: array![],
+            }]))).unwrap();
+
+            loop {
+                let message = client.recv_message().unwrap();
+
+                let data = match message {
+                    OwnedMessage::Text(text) => text,
+                    OwnedMessage::Binary(_) => todo!(),
+                    OwnedMessage::Ping(data) => { client.send_message(&Message::pong(data)).unwrap(); continue },
+                    OwnedMessage::Pong(_) => continue,
+                    OwnedMessage::Close(_) => break,
+                };
+                let frame = json::parse(&data).expect("Received invalid JSON");
+
+                for command in frame.members() {
+                    let v = &command["cmd"];
+                    if v != "Sync" {
+                        todo!();
+                    }
+
+                    let response = json::stringify(array![]);
+                    client.send_message(&Message::text(response)).expect("Could not send message");
+                }
+            }
+        });
+    }
 
     Ok(())
 }
