@@ -1,6 +1,6 @@
 use json::{object, JsonValue};
 
-use crate::uat::UAT_PROTOCOL_VERSION;
+use crate::uat::{UAT_PROTOCOL_VERSION, variable::Variable};
 
 pub struct SyncCommand {
     #[allow(dead_code)]
@@ -82,16 +82,16 @@ impl Into<JsonValue> for InfoCommand {
 #[derive(Debug, Clone)]
 pub struct VarCommand {
     name: String,
-    value: Option<u32>,  // TODO: More types
+    value: Variable,
     slot: Option<i32>,
 }
 
 impl VarCommand {
-    pub fn new(name: &str, value: Option<u32>) -> Self {
+    pub fn new(name: &str, value: Variable) -> Self {
         Self::with_slot(name, value, None)
     }
 
-    pub fn with_slot(name: &str, value: Option<u32>, slot: Option<i32>) -> Self {
+    pub fn with_slot(name: &str, value: Variable, slot: Option<i32>) -> Self {
         Self {
             name: name.to_owned(),
             value,

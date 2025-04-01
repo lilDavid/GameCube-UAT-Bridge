@@ -2,23 +2,22 @@ mod connector;
 mod gamecube;
 mod uat;
 
-use std::{collections::HashMap, env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
+use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
 
 use connector::GameCubeConnector;
 use gamecube::{GCN_GAME_ID_ADDRESS, PRIME_GAME_STATE_ADDRESS, PRIME_WORLD_OFFSET};
-use uat::command::{ClientCommand, InfoCommand, VarCommand};
+use uat::{command::{ClientCommand, InfoCommand, VarCommand}, variable::{Variable, VariableStore}};
 use websocket::{Message, OwnedMessage, WebSocketError};
 
 #[cfg(target_os = "windows")]
 use crate::connector::dolphin::DolphinConnector;
 use crate::connector::nintendont::NintendontConnector;
-
 use crate::uat::UAT_PORT_MAIN;
 
 #[derive(Debug, Clone)]
 struct VariableWatch {
     name: String,
-    value: Option<u32>,  // TODO: More types
+    value: Variable,
 }
 
 #[cfg(target_os = "windows")]
@@ -43,9 +42,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let target = argv.next().expect("Need IP Address or to specify Dolphin");
 
+    let mut variable_store = VariableStore::new();
+    variable_store.register_variable("world")?;
+
     let client_message_channels: Arc<Mutex<Vec<Sender<Vec<VariableWatch>>>>> = Arc::new(Mutex::new(Vec::new()));
     let channels = Arc::clone(&client_message_channels);
-    let variable_store: Arc<Mutex<HashMap<String, Option<u32>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let variable_store: Arc<Mutex<VariableStore>> = Arc::new(Mutex::new(variable_store));
     let variables = Arc::clone(&variable_store);
     thread::spawn(move || {
         let client_message_channels = channels;
@@ -77,14 +79,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let world = connector.read_pointers(4, PRIME_GAME_STATE_ADDRESS, &[PRIME_WORLD_OFFSET])
                     .ok()
                     .map(|result| u32::from_be_bytes([result[0], result[1], result[2], result[3]]));
-                let old_value = variables.get("world").map(Option::as_ref).flatten();
-                if old_value != world.as_ref() {
+                if variables.update_variable("world", world).unwrap() {
                     if let Some(world) = world {
                         println!(">> Game world: {}", world);
                     } else {
                         println!(">> Game world: None");
                     }
-                    variables.insert("world".into(), world);
                     changes.push(VariableWatch { name: "world".to_owned(), value: world.clone() });
                 }
                 changes
@@ -148,7 +148,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                 for command in frame.members() {
                     let response = match ClientCommand::try_from(command) {
-                        Ok(ClientCommand::Sync(_)) => variable_store.lock().unwrap().iter().map(|(name, value)| VarCommand::new(name, value.clone())).collect::<Vec<_>>(),
+                        Ok(ClientCommand::Sync(_)) => variable_store.lock().unwrap().variable_values().map(|(name, value)| VarCommand::new(name, value.clone())).collect::<Vec<_>>(),
                         _ => todo!(),
                     };
                     socket_writer.lock().unwrap().send_message(&Message::text(json::stringify(response))).expect("Could not send message");
