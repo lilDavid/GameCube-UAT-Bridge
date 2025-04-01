@@ -38,6 +38,7 @@ impl TryFrom<&JsonValue> for ClientCommand {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct InfoCommand {
     name: String,
     version: Option<String>,
@@ -78,6 +79,7 @@ impl Into<JsonValue> for InfoCommand {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct VarCommand {
     name: String,
     value: u32,  // TODO: More types
@@ -112,6 +114,7 @@ impl Into<JsonValue> for VarCommand {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ErrorReplyCommand {
 }
 
