@@ -1,6 +1,6 @@
 use std::{io::{self, ErrorKind, Read, Write}, net::{IpAddr, TcpStream}};
 
-use super::GameCubeConnector;
+use super::{GameCubeConnector, GameCubeConnectorError};
 
 struct Op {
     address_index: u8,
@@ -96,13 +96,13 @@ pub struct NintendontConnector {
 impl NintendontConnector {
     const PORT: u16 = 43673;
 
-    pub fn new(ip_addr: IpAddr) -> Result<Self, io::Error> {
+    pub fn new(ip_addr: IpAddr) -> Result<Self, GameCubeConnectorError> {
         let mut socket = TcpStream::connect((ip_addr, Self::PORT))?;
         let connection_info = NitendontConnectionInfo::get(&mut socket)?;
         Ok(Self {socket, connection_info})
     }
 
-    fn send_socket(&mut self, addresses: &[u32], ops: &[Op]) -> Result<Vec<u8>, io::Error> {
+    fn send_socket(&mut self, addresses: &[u32], ops: &[Op]) -> Result<Vec<u8>, GameCubeConnectorError> {
         let mut data: Vec<u8> = vec![
             0,
             ops.len().try_into().map_err(|_| io::Error::new(ErrorKind::InvalidInput, "Too many operations provided"))?,
@@ -120,14 +120,14 @@ impl NintendontConnector {
         for i in 0..ops.len() {
             last_validation_index = i / 8;
             if response[last_validation_index] & (1 << (i % 8)) == 0 {
-                return Err(io::Error::new(ErrorKind::InvalidData, format!("Operation {} used an invalid address", i)));
+                return Err(GameCubeConnectorError::InvalidAddress(addresses[i]));
             }
         }
 
         Ok(Vec::from(&response[last_validation_index + 1 ..]))
     }
 
-    fn read_memory(&mut self, ops: &[u32]) -> Result<Vec<u8>, io::Error> {
+    fn read_memory(&mut self, ops: &[u32]) -> Result<Vec<u8>, GameCubeConnectorError> {
         let mut addresses = Vec::new();
         for i in 0..ops.len() {
             addresses.push(Op::new(i as u8, None))
@@ -137,7 +137,7 @@ impl NintendontConnector {
 }
 
 impl GameCubeConnector for NintendontConnector {
-    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
+    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, GameCubeConnectorError> {
         let residual = address % 4;
         let size = size + residual;
         let address = address - residual;

@@ -74,7 +74,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let changes = {
                 let mut changes = vec![];
                 let mut variables = variable_store.lock().unwrap();
-                let result = connector.read_pointers(4, PRIME_GAME_STATE_ADDRESS, &[PRIME_WORLD_OFFSET]).unwrap();
+                let result = match connector.read_pointers(4, PRIME_GAME_STATE_ADDRESS, &[PRIME_WORLD_OFFSET]) {
+                    Ok(result) => result,
+                    Err(e) => { eprintln!("{}", e); continue; }
+                };
                 let world = u32::from_be_bytes([result[0], result[1], result[2], result[3]]);
                 let old_value = variables.as_ref();
                 if old_value != Some(&world) {

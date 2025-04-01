@@ -1,10 +1,6 @@
-use std::error::Error;
-use std::io;
-
 use dolphin_memory::Dolphin;
 
-use crate::gamecube::*;
-use crate::connector::GameCubeConnector;
+use crate::connector::{GameCubeConnector, GameCubeConnectorError};
 
 pub struct DolphinConnector {
     dolphin: Dolphin
@@ -17,11 +13,11 @@ impl DolphinConnector {
 }
 
 impl GameCubeConnector for DolphinConnector {
-    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
+    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, GameCubeConnectorError> {
         self.read_pointers(size, address, &[])
     }
 
-    fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
-        self.dolphin.read(size as usize, address as usize, Some(&offsets.iter().copied().map(|i| i as isize as usize).collect::<Vec<usize>>()))
+    fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, GameCubeConnectorError> {
+        Ok(self.dolphin.read(size as usize, address as usize, Some(&offsets.iter().copied().map(|i| i as isize as usize).collect::<Vec<usize>>()))?)
     }
 }
