@@ -82,16 +82,16 @@ impl Into<JsonValue> for InfoCommand {
 #[derive(Debug, Clone)]
 pub struct VarCommand {
     name: String,
-    value: u32,  // TODO: More types
+    value: Option<u32>,  // TODO: More types
     slot: Option<i32>,
 }
 
 impl VarCommand {
-    pub fn new(name: &str, value: u32) -> Self {
+    pub fn new(name: &str, value: Option<u32>) -> Self {
         Self::with_slot(name, value, None)
     }
 
-    pub fn with_slot(name: &str, value: u32, slot: Option<i32>) -> Self {
+    pub fn with_slot(name: &str, value: Option<u32>, slot: Option<i32>) -> Self {
         Self {
             name: name.to_owned(),
             value,
