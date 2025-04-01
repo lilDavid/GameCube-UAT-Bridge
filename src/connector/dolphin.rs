@@ -1,19 +1,27 @@
 use std::error::Error;
+use std::io;
 
 use dolphin_memory::Dolphin;
 
 use crate::gamecube::*;
+use crate::connector::GameCubeConnector;
 
-pub fn read_game_world() -> Result<u32, Box<dyn Error>> {
-    let dolphin = Dolphin::new()?;
+pub struct DolphinConnector {
+    dolphin: Dolphin
+}
 
-    let game_id = dolphin.read_string(6, GCN_GAME_ID_ADDRESS as usize, None)?;
-    let game_revision = dolphin.read_u8(GCN_GAME_ID_ADDRESS as usize + 6, None)?;
-    println!(">> Game ID: {}", game_id);
-    println!(">> Revision: {}", game_revision);
+impl DolphinConnector {
+    pub fn new() -> Result<Self, dolphin_memory::ProcessError> {
+        Ok(Self { dolphin: Dolphin::new()? })
+    }
+}
 
-    let world = dolphin.read_u32(PRIME_GAME_STATE_ADDRESS as usize, Some(&[PRIME_WORLD_OFFSET as usize]))?;
-    println!(">> Game world: {}", world);
+impl GameCubeConnector for DolphinConnector {
+    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
+        self.read_pointers(size, address, &[])
+    }
 
-    Ok(world)
+    fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
+        self.dolphin.read(size as usize, address as usize, Some(&offsets.iter().copied().map(|i| i as isize as usize).collect::<Vec<usize>>()))
+    }
 }

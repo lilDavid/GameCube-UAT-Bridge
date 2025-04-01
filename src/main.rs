@@ -2,15 +2,16 @@ mod connector;
 mod gamecube;
 mod uat;
 
-use std::{error::Error, net::Ipv4Addr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
+use std::{env, error::Error, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
 
+use connector::GameCubeConnector;
+use gamecube::{GCN_GAME_ID_ADDRESS, PRIME_GAME_STATE_ADDRESS, PRIME_WORLD_OFFSET};
 use uat::command::{ClientCommand, InfoCommand, VarCommand};
 use websocket::{Message, OwnedMessage};
 
 #[cfg(target_os = "windows")]
-use crate::connector::dolphin::read_game_world;
-#[cfg(not(target_os = "windows"))]
-use crate::connector::nintendont::read_game_world;
+use crate::connector::dolphin::DolphinConnector;
+use crate::connector::nintendont::NintendontConnector;
 
 use crate::uat::UAT_PORT_MAIN;
 
@@ -19,8 +20,55 @@ struct VariableWatch {
     value: u32,  // TODO: More types
 }
 
+#[cfg(target_os = "windows")]
+fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector>, &'static str> {
+    loop {
+        println!("Connecting to Dolphin...");
+        match DolphinConnector::new() {
+            Ok(dolphin) => break Ok(Box::new(dolphin)),
+            Err(err) => eprintln!("{}", err),
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector>, &'static str> {
+    Err("Dolphin is not supported on this platform")
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let world = read_game_world()?;
+    let world = {
+        let mut argv = env::args();
+        argv.next();  // Consume argv[0]
+
+        let target = argv.next().expect("Need IP Address or to specify Dolphin");
+
+        let mut connector: Box<dyn GameCubeConnector> = {
+            if target.to_lowercase() == "dolphin" {
+                get_dolphin_connector()?
+            } else {
+                println!("Connecting to Nintendont at {}...", target);
+                loop {
+                    match NintendontConnector::new(IpAddr::from_str(&target)?) {
+                        Ok(nintendont) => break Box::new(nintendont),
+                        Err(err) => eprintln!("{}", err),
+                    }
+                }
+            }
+        };
+        println!("Connected");
+
+        let game_id = String::from_utf8(connector.read_address(6, GCN_GAME_ID_ADDRESS)?)?;
+        println!(">> Game ID: {}", game_id);
+        let game_revision = String::from_utf8(connector.read_address(1, GCN_GAME_ID_ADDRESS + 6)?)?;
+        println!(">> Revision: {}", game_revision);
+
+        let result = connector.read_pointers(4, PRIME_GAME_STATE_ADDRESS, &[PRIME_WORLD_OFFSET])?;
+        let world = u32::from_be_bytes([result[0], result[1], result[2], result[3]]);
+        println!(">> Game world: {}", world);
+
+        world
+    };
 
     let client_message_channels: Arc<Mutex<Vec<Sender<Vec<VariableWatch>>>>> = Arc::new(Mutex::new(Vec::new()));
     let channels = Arc::clone(&client_message_channels);
