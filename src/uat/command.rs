@@ -2,8 +2,8 @@ use json::{object, JsonValue};
 
 use crate::uat::{UAT_PROTOCOL_VERSION, variable::Variable};
 
+#[allow(dead_code)]
 pub struct SyncCommand {
-    #[allow(dead_code)]
     slot: Option<String>,
 }
 
@@ -18,22 +18,21 @@ impl SyncCommand {
     }
 }
 
+#[allow(dead_code)]
 pub enum ClientCommand {
-    #[allow(dead_code)]
     Sync(SyncCommand),
+    Invalid,
 }
 
-impl TryFrom<&JsonValue> for ClientCommand {
-    type Error = ();
-
-    fn try_from(value: &JsonValue) -> Result<Self, Self::Error> {
+impl From<JsonValue> for ClientCommand {
+    fn from(value: JsonValue) -> Self {
         if let JsonValue::Object(obj) = value {
             match obj["cmd"].as_str() {
-                Some("Sync") => Ok(Self::Sync(SyncCommand { slot: obj["slot"].as_str().map(String::from) })),
-                _ => Err(()),
+                Some("Sync") => Self::Sync(SyncCommand { slot: obj["slot"].as_str().map(String::from) }),
+                _ => Self::Invalid,
             }
         } else {
-            Err(())
+            Self::Invalid
         }
     }
 }
@@ -118,8 +117,52 @@ impl Into<JsonValue> for VarCommand {
 pub struct ErrorReplyCommand {
 }
 
+impl ErrorReplyCommand {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
 impl Into<JsonValue> for ErrorReplyCommand {
     fn into(self) -> JsonValue {
         todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ServerCommand {
+    Info(InfoCommand),
+    Var(VarCommand),
+    ErrorReply(ErrorReplyCommand),
+}
+
+#[allow(dead_code)]
+impl ServerCommand {
+    pub fn info(name: &str, version: Option<&str>) -> Self {
+        Self::Info(InfoCommand::new(name, version))
+    }
+    pub fn info_with_features(name: &str, version: Option<&str>, features: Option<&[&str]>, slots: Option<&[&str]>) -> Self {
+        Self::Info(InfoCommand::with_features(name, version, features, slots))
+    }
+
+    pub fn var(name: &str, value: Variable) -> Self {
+        Self::Var(VarCommand::new(name, value))
+    }
+    pub fn var_with_slot(name: &str, value: Variable, slot: Option<i32>) -> Self {
+        Self::Var(VarCommand::with_slot(name, value, slot))
+    }
+
+    pub fn error_reply() -> Self {
+        Self::ErrorReply(ErrorReplyCommand::new())
+    }
+}
+
+impl Into<JsonValue> for ServerCommand {
+    fn into(self) -> JsonValue {
+        match self {
+            Self::Info(cmd) => cmd.into(),
+            Self::Var(cmd) => cmd.into(),
+            Self::ErrorReply(cmd) => cmd.into(),
+        }
     }
 }

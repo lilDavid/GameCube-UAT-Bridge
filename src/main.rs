@@ -6,8 +6,8 @@ use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromSt
 
 use connector::GameCubeConnector;
 use gamecube::{GCN_GAME_ID_ADDRESS, PRIME_GAME_STATE_ADDRESS, PRIME_WORLD_OFFSET};
-use uat::{command::{ClientCommand, InfoCommand, VarCommand}, variable::{Variable, VariableStore}};
-use websocket::{Message, OwnedMessage, WebSocketError};
+use uat::{command::{ClientCommand, ServerCommand}, variable::{Variable, VariableStore}, MessageResponse, Server};
+use websocket::WebSocketError;
 
 #[cfg(target_os = "windows")]
 use crate::connector::dolphin::DolphinConnector;
@@ -98,34 +98,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let uat_server = websocket::server::sync::Server::bind((Ipv4Addr::LOCALHOST, UAT_PORT_MAIN))?;
-    for connection in uat_server.filter_map(Result::ok) {
+    let uat_server = Server::new(Ipv4Addr::LOCALHOST, UAT_PORT_MAIN)?;
+    for client in uat_server.accept_clients().filter_map(Result::ok) {
         let variable_store = Arc::clone(&variable_store);
-        let (mut socket_reader, mut socket_writer) = match connection.accept() {
-            Ok(client) => {
-                match client.split() {
-                    Ok(client) => client,
-                    Err(e) => { eprintln!("Could not get reader and writer: {}", e); continue; }
-                }
-            },
-            Err((_, e)) => {
-                eprintln!("Connection error: {}", e); continue;
-            },
-        };
+        let (mut socket_reader, mut socket_writer) = client.split()?;
         let (item_sender, item_receiver) = channel();
         client_message_channels.lock().unwrap().push(item_sender);
 
         thread::spawn(move || {
-            let info = vec![InfoCommand::new("Metroid Prime", Some("0-00"))];
-            socket_writer.send_message(&Message::text(json::stringify(info))).unwrap();
+            let info = vec![ServerCommand::info("Metroid Prime", Some("0-00"))];
+            socket_writer.send(&info).unwrap();
 
             let socket_writer = Arc::new(Mutex::new(socket_writer));
             let writer = Arc::clone(&socket_writer);
             thread::spawn(move || {
                 let writer = writer;
                 for received in item_receiver {
-                    let message = received.into_iter().map(|watch| VarCommand::new(&watch.name, watch.value)).collect::<Vec::<_>>();
-                    if let Err(WebSocketError::IoError(err)) = writer.lock().unwrap().send_message(&Message::text(json::stringify(message))) {
+                    let message = received.into_iter().map(|watch| ServerCommand::var(&watch.name, watch.value)).collect::<Vec::<_>>();
+                    if let Err(WebSocketError::IoError(err)) = writer.lock().unwrap().send(&message) {
                         if err.kind() != ErrorKind::BrokenPipe {
                             eprintln!("{}", err);
                         }
@@ -135,23 +125,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             });
 
             loop {
-                let message = socket_reader.recv_message().unwrap();
-
-                let data = match message {
-                    OwnedMessage::Text(text) => text,
-                    OwnedMessage::Binary(_) => todo!(),
-                    OwnedMessage::Ping(data) => { socket_writer.lock().unwrap().send_message(&Message::pong(data)).unwrap(); continue },
-                    OwnedMessage::Pong(_) => continue,
-                    OwnedMessage::Close(_) => break,
+                let commands = match socket_reader.receive() {
+                    Ok(commands) => commands,
+                    Err(err) => match socket_writer.lock().unwrap().handle_error(err) {
+                        MessageResponse::Continue => continue,
+                        MessageResponse::Stop(err) => {
+                            if let Some(e) = err { eprintln!("{}", e); }
+                            break;
+                        }
+                    }
                 };
-                let frame = json::parse(&data).expect("Received invalid JSON");
-
-                for command in frame.members() {
-                    let response = match ClientCommand::try_from(command) {
-                        Ok(ClientCommand::Sync(_)) => variable_store.lock().unwrap().variable_values().map(|(name, value)| VarCommand::new(name, value.clone())).collect::<Vec<_>>(),
+                for command in commands {
+                    let response = match ClientCommand::from(command) {
+                        ClientCommand::Sync(_) => variable_store.lock().unwrap().variable_values().map(|(name, value)| ServerCommand::var(name, value.clone())).collect::<Vec<_>>(),
                         _ => todo!(),
                     };
-                    socket_writer.lock().unwrap().send_message(&Message::text(json::stringify(response))).expect("Could not send message");
+                    socket_writer.lock().unwrap().send(&response).expect("Could not send message");
                 }
             }
 
