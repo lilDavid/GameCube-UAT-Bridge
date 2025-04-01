@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+mod dolphin;
 mod nintendont;
 mod gamecube;
 
@@ -6,6 +8,9 @@ use std::{error::Error, net::Ipv4Addr, thread};
 use json::{array, object};
 use websocket::{Message, OwnedMessage};
 
+#[cfg(target_os = "windows")]
+use crate::dolphin::read_game_world;
+#[cfg(not(target_os = "windows"))]
 use crate::nintendont::read_game_world;
 
 const UAT_PORT_MAIN: u16 = 65399;

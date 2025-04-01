@@ -156,7 +156,7 @@ pub fn read_game_world() -> Result<u32, Box<dyn Error>> {
 
     let result = read_memory(&mut nintendont_socket, &[GCN_GAME_ID_ADDRESS, GCN_GAME_ID_ADDRESS + 4])?;
     let game_id = String::from_utf8(result[0..6].into())?;
-    let game_revision = result[7];
+    let game_revision = result[6];
     println!(">> Game ID: {}", game_id);
     println!(">> Revision: {}", game_revision);
 
