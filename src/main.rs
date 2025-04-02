@@ -29,12 +29,12 @@ fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send>, &'static
     let result = loop {
         println!("Connecting to Dolphin...");
         match DolphinConnector::new() {
-            Ok(dolphin) => break Ok(Box::new(dolphin)),
+            Ok(dolphin) => break Box::new(dolphin),
             Err(err) => eprintln!("{}", err),
         }
     };
     println!("Connected");
-    result
+    Ok(result)
 }
 
 #[cfg(not(target_os = "windows"))]
