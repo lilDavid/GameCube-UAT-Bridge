@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, error::Error, fmt::Display};
 
 use json::JsonValue;
 
-use crate::game_interface::VariableDefinition;
+use crate::game_interface::{VariableDefinition, VariableDefinitionParseError};
 
 
 pub struct GameInfo {
@@ -35,6 +35,31 @@ impl GameInfo {
 
 pub struct GameRegister(HashMap<(Box<str>, u8), GameInfo>);
 
+#[derive(Debug)]
+pub enum GameRegisterParseError {
+    WrongType,
+    MissingField(&'static str),
+    VariableDefinitionParseError(VariableDefinitionParseError),
+}
+
+impl Display for GameRegisterParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WrongType => "Value has wrong type".fmt(f),
+            Self::MissingField(s) => { "Missing field ".fmt(f)?; s.fmt(f) }
+            Self::VariableDefinitionParseError(e) => e.fmt(f),
+        }
+    }
+}
+
+impl Error for GameRegisterParseError {}
+
+impl From<VariableDefinitionParseError> for GameRegisterParseError {
+    fn from(value: VariableDefinitionParseError) -> Self {
+        Self::VariableDefinitionParseError(value)
+    }
+}
+
 impl GameRegister {
     pub fn new() -> Self {
         Self(HashMap::new())
@@ -44,22 +69,22 @@ impl GameRegister {
         self.0.insert((game_id.into(), revision), GameInfo::new(game_name, version, variables));
     }
 
-    pub fn register_from_json(&mut self, json_value: &JsonValue) -> Result<(), ()> {
+    pub fn register_from_json(&mut self, json_value: &JsonValue) -> Result<(), GameRegisterParseError> {
         let obj = match json_value {
             JsonValue::Object(o) => o,
-            _ => Err(())?,
+            _ => Err(GameRegisterParseError::WrongType)?,
         };
-        let game_id = obj["gameID"].as_str().ok_or(())?;
-        let revision = obj["revision"].as_u8().ok_or(())?;
-        let game_name = obj["game"].as_str().ok_or(())?;
-        let version = obj["version"].as_str().ok_or(())?;
+        let game_id = obj["gameID"].as_str().ok_or(GameRegisterParseError::MissingField("gameID"))?;
+        let revision = obj["revision"].as_u8().ok_or(GameRegisterParseError::MissingField("revision"))?;
+        let game_name = obj["game"].as_str().ok_or(GameRegisterParseError::MissingField("game"))?;
+        let version = obj["version"].as_str().ok_or(GameRegisterParseError::MissingField("version"))?;
         let variables = &obj["variables"];
         if !variables.is_array() {
-            return Err(());
+            return Err(GameRegisterParseError::MissingField("variables"));
         }
         let variables = variables.members()
             .map(VariableDefinition::try_from)
-            .collect::<Result<Vec<_>, ()>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         self.register(game_id, revision, game_name, version, &variables);
         Ok(())
     }

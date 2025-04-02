@@ -1,9 +1,28 @@
 use std::{borrow::Borrow, collections::HashMap, error::Error, fmt::Display};
 
-pub type Variable = Option<u32>;  // TODO: Support more types
+use json::JsonValue;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Variable {
+    U32(u32),
+}
+
+impl Into<JsonValue> for Variable {
+    fn into(self) -> JsonValue {
+        (&self).into()
+    }
+}
+
+impl Into<JsonValue> for &Variable {
+    fn into(self) -> JsonValue {
+        match self {
+            Variable::U32(i) => (*i).into()
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
-pub struct VariableStore(HashMap<Box<str>, Variable>);
+pub struct VariableStore(HashMap<Box<str>, Option<Variable>>);
 
 #[derive(Debug)]
 pub struct VariableRegisterError;
@@ -41,7 +60,7 @@ impl VariableStore {
         Ok(())
     }
 
-    pub fn update_variable(&mut self, name: &str, value: Variable) -> Result<bool, VariableUpdateError> {
+    pub fn update_variable(&mut self, name: &str, value: Option<Variable>) -> Result<bool, VariableUpdateError> {
         let entry = self.0.get_mut(name).ok_or(VariableUpdateError {})?;
         if entry == &value {
             Ok(false)
@@ -51,7 +70,7 @@ impl VariableStore {
         }
     }
 
-    pub fn variable_values(&self) -> impl Iterator<Item = (&str, &Variable)> {
-        self.0.iter().map(|(key, var)| (key.borrow(), var))
+    pub fn variable_values(&self) -> impl Iterator<Item = (&str, Option<&Variable>)> {
+        self.0.iter().map(|(key, var)| (key.borrow(), var.as_ref()))
     }
 }

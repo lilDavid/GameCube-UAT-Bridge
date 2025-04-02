@@ -21,7 +21,7 @@ const GCN_GAME_ID_ADDRESS: u32 = 0x80000000;
 #[derive(Debug, Clone)]
 struct VariableWatch {
     name: String,
-    value: Variable,
+    value: Option<Variable>,
 }
 
 #[cfg(target_os = "windows")]
@@ -104,8 +104,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let changes = {
                 let mut variables = variable_store.lock().unwrap();
                 interface.read_variables()
-                    .filter_map(|(name, value)| match variables.update_variable(name, value).unwrap() {
-                        true => Some(VariableWatch { name: name.to_owned(), value: value.clone() }),
+                    .filter_map(|(name, value)| match variables.update_variable(name, value.clone()).unwrap() {
+                        true => Some(VariableWatch { name: name.to_owned(), value: value }),
                         false => None
                     })
                     .collect::<Vec<_>>()
@@ -157,7 +157,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
                 for command in commands {
                     let response = match ClientCommand::from(command) {
-                        ClientCommand::Sync(_) => variable_store.lock().unwrap().variable_values().map(|(name, value)| ServerCommand::var(name, value.clone())).collect::<Vec<_>>(),
+                        ClientCommand::Sync(_) => variable_store.lock().unwrap().variable_values().map(|(name, value)| ServerCommand::var(name, value.cloned())).collect::<Vec<_>>(),
                         _ => todo!(),
                     };
                     socket_writer.lock().unwrap().send(&response).expect("Could not send message");
