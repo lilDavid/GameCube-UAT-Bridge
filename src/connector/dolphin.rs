@@ -18,6 +18,12 @@ impl GameCubeConnector for DolphinConnector {
     }
 
     fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, GameCubeConnectorError> {
-        Ok(self.dolphin.read(size as usize, address as usize, Some(&offsets.iter().copied().map(|i| i as isize as usize).collect::<Vec<usize>>()))?)
+        // For some reason, passing an empty Vec instead of None causes read() to always return a null address error
+        let offsets = if offsets.len() == 0 {
+            None
+        } else {
+            Some(offsets.iter().copied().map(|i| i as isize as usize).collect::<Vec<usize>>())
+        };
+        Ok(self.dolphin.read(size as usize, address as usize, offsets.as_ref().map(Vec::as_slice))?)
     }
 }

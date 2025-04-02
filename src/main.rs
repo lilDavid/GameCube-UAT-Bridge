@@ -75,9 +75,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         game_register.register_from_json(&json).map_err(|_| "Could not register game")?;
     }
 
-    let game_id = String::from_utf8(connector.read_address(6, GCN_GAME_ID_ADDRESS).unwrap()).unwrap();
+    let game_id = String::from_utf8(connector.read_address(6, GCN_GAME_ID_ADDRESS)?).unwrap();
     println!(">> Game ID: {}", game_id);
-    let game_revision = connector.read_address(1, GCN_GAME_ID_ADDRESS + 6).unwrap()[0];
+    let game_revision = connector.read_address(1, GCN_GAME_ID_ADDRESS + 6)?[0];
     println!(">> Revision: {}", game_revision);
 
     let game_info = game_register.identify(&game_id, game_revision).ok_or("Could not identify game")?;
