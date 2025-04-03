@@ -1,6 +1,6 @@
 use json::{object, JsonValue};
 
-use crate::uat::{UAT_PROTOCOL_VERSION, variable::Variable};
+use crate::uat::UAT_PROTOCOL_VERSION;
 
 #[allow(dead_code)]
 pub struct SyncCommand {
@@ -39,20 +39,20 @@ impl From<JsonValue> for ClientCommand {
 
 #[derive(Debug, Clone)]
 pub struct InfoCommand {
-    name: String,
+    name: Option<String>,
     version: Option<String>,
     features: Option<Vec<String>>,
     slots: Option<Vec<String>>,
 }
 
 impl InfoCommand {
-    pub fn new(name: &str, version: Option<&str>) -> Self {
+    pub fn new(name: Option<&str>, version: Option<&str>) -> Self {
         Self::with_features(name, version, None, None)
     }
 
-    pub fn with_features(name: &str, version: Option<&str>, features: Option<&[&str]>, slots: Option<&[&str]>) -> Self {
+    pub fn with_features(name: Option<&str>, version: Option<&str>, features: Option<&[&str]>, slots: Option<&[&str]>) -> Self {
         Self {
-            name: name.to_owned(),
+            name: name.map(str::to_owned),
             version: version.map(str::to_owned),
             features: features.map(|slice| slice.iter().copied().map(str::to_owned).collect()),
             slots: slots.map(|slice| slice.iter().copied().map(str::to_owned).collect()),
@@ -81,16 +81,16 @@ impl Into<JsonValue> for InfoCommand {
 #[derive(Debug, Clone)]
 pub struct VarCommand {
     name: String,
-    value: Option<Variable>,
+    value: JsonValue,
     slot: Option<i32>,
 }
 
 impl VarCommand {
-    pub fn new(name: &str, value: Option<Variable>) -> Self {
+    pub fn new(name: &str, value: JsonValue) -> Self {
         Self::with_slot(name, value, None)
     }
 
-    pub fn with_slot(name: &str, value: Option<Variable>, slot: Option<i32>) -> Self {
+    pub fn with_slot(name: &str, value: JsonValue, slot: Option<i32>) -> Self {
         Self {
             name: name.to_owned(),
             value,
@@ -138,17 +138,17 @@ pub enum ServerCommand {
 
 #[allow(dead_code)]
 impl ServerCommand {
-    pub fn info(name: &str, version: Option<&str>) -> Self {
+    pub fn info(name: Option<&str>, version: Option<&str>) -> Self {
         Self::Info(InfoCommand::new(name, version))
     }
-    pub fn info_with_features(name: &str, version: Option<&str>, features: Option<&[&str]>, slots: Option<&[&str]>) -> Self {
+    pub fn info_with_features(name: Option<&str>, version: Option<&str>, features: Option<&[&str]>, slots: Option<&[&str]>) -> Self {
         Self::Info(InfoCommand::with_features(name, version, features, slots))
     }
 
-    pub fn var(name: &str, value: Option<Variable>) -> Self {
+    pub fn var(name: &str, value: JsonValue) -> Self {
         Self::Var(VarCommand::new(name, value))
     }
-    pub fn var_with_slot(name: &str, value: Option<Variable>, slot: Option<i32>) -> Self {
+    pub fn var_with_slot(name: &str, value: JsonValue, slot: Option<i32>) -> Self {
         Self::Var(VarCommand::with_slot(name, value, slot))
     }
 

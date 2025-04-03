@@ -1,14 +1,16 @@
+use std::sync::Mutex;
+
 use dolphin_memory::Dolphin;
 
 use crate::connector::{GameCubeConnector, GameCubeConnectorError};
 
 pub struct DolphinConnector {
-    dolphin: Dolphin
+    dolphin: Mutex<Dolphin>
 }
 
 impl DolphinConnector {
     pub fn new() -> Result<Self, dolphin_memory::ProcessError> {
-        Ok(Self { dolphin: Dolphin::new()? })
+        Ok(Self { dolphin: Mutex::new(Dolphin::new()?) })
     }
 }
 
@@ -24,6 +26,6 @@ impl GameCubeConnector for DolphinConnector {
         } else {
             Some(offsets.iter().copied().map(|i| i as isize as usize).collect::<Vec<usize>>())
         };
-        Ok(self.dolphin.read(size as usize, address as usize, offsets.as_ref().map(Vec::as_slice))?)
+        Ok(self.dolphin.lock().unwrap().read(size as usize, address as usize, offsets.as_ref().map(Vec::as_slice))?)
     }
 }

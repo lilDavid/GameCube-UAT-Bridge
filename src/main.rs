@@ -1,14 +1,13 @@
 mod connector;
-mod config;
-mod game_interface;
+mod lua;
 mod uat;
 
-use std::{env, error::Error, fs::File, io::{ErrorKind, Read}, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
+use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
 
-use config::GameRegister;
 use connector::GameCubeConnector;
-use game_interface::GameCubeInterface;
-use uat::{command::{ClientCommand, ServerCommand}, variable::{Variable, VariableStore}, MessageResponse, Server};
+use json::JsonValue;
+use lua::LuaInterface;
+use uat::{command::{ClientCommand, ServerCommand}, variable::VariableStore, MessageResponse, Server};
 use websocket::WebSocketError;
 
 #[cfg(target_os = "windows")]
@@ -16,21 +15,19 @@ use crate::connector::dolphin::DolphinConnector;
 use crate::connector::nintendont::NintendontConnector;
 use crate::uat::UAT_PORT_MAIN;
 
-const GCN_GAME_ID_ADDRESS: u32 = 0x80000000;
-
 #[derive(Debug, Clone)]
 struct VariableWatch {
     name: String,
-    value: Option<Variable>,
+    value: JsonValue,
 }
 
 #[cfg(target_os = "windows")]
-fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send>, &'static str> {
+fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send + Sync>, &'static str> {
     let result = loop {
         println!("Connecting to Dolphin...");
         match DolphinConnector::new() {
             Ok(dolphin) => break Box::new(dolphin),
-            Err(err) => eprintln!("{}", err),
+            Err(err) => {eprintln!("{}", err); thread::sleep(Duration::from_secs(1))},
         }
     };
     println!("Connected");
@@ -38,16 +35,16 @@ fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send>, &'static
 }
 
 #[cfg(not(target_os = "windows"))]
-fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send>, &'static str> {
+fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send + Sync>, &'static str> {
     Err("Dolphin is not supported on this platform")
 }
 
-fn get_nintendont_connector(address: &str) -> Box<dyn GameCubeConnector + Send> {
+fn get_nintendont_connector(address: &str) -> Box<dyn GameCubeConnector + Send + Sync> {
     println!("Connecting to Nintendont at {}...", address);
     let result = loop {
         match NintendontConnector::new(IpAddr::from_str(address).unwrap()) {
             Ok(nintendont) => break Box::new(nintendont),
-            Err(err) => eprintln!("{}", err),
+            Err(err) => {eprintln!("{}", err); thread::sleep(Duration::from_secs(1))},
         }
     };
     println!("Connected");
@@ -60,40 +57,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let target = argv.next().ok_or("Need IP Address or to specify Dolphin")?;
 
-    let mut connector: Box<dyn GameCubeConnector + Send> = if target.to_lowercase() == "dolphin" {
+    let connector: Box<dyn GameCubeConnector + Send + Sync> = if target.to_lowercase() == "dolphin" {
         get_dolphin_connector().unwrap()
     } else {
         get_nintendont_connector(&target)
     };
 
-    let mut game_register = GameRegister::new();
-    while let Some(filename) = argv.next() {
-        let mut file = File::open(filename)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        let json = json::parse(&contents)?;
-        game_register.register_from_json(&json).map_err(|_| "Could not register game")?;
+    let mut lua_interface = LuaInterface::new(connector)?;
+    for arg in argv {
+        lua_interface.run_script(arg)?;
     }
 
-    let game_id = String::from_utf8(connector.read_address(6, GCN_GAME_ID_ADDRESS)?).unwrap();
-    println!(">> Game ID: {}", game_id);
-    let game_revision = connector.read_address(1, GCN_GAME_ID_ADDRESS + 6)?[0];
-    println!(">> Revision: {}", game_revision);
+    let interface = match lua_interface.select_game_interface() {
+        Some((name, interface)) => { println!("Found interface {} for {}", name, interface.name()?.unwrap_or_else(|| "<nil>".into())); interface },
+        None => Err("No interface found")?
+    };
 
-    let game_info = game_register.identify(&game_id, game_revision).ok_or("Could not identify game")?;
-    let game_info_command = vec![ServerCommand::info(game_info.name(), Some(game_info.version()))];
-
-    let mut interface = GameCubeInterface::new(
-        connector,
-        game_info.variables(),
-    );
-    let mut variable_store = VariableStore::new();
-    for variable in interface.variable_definitions() {
-        variable_store.register_variable(variable.name()).ok();
-    }
+    let game_info_command = vec![ServerCommand::info(interface.name()?.as_deref(), interface.version()?.as_deref())];
 
     let client_message_channels: Arc<Mutex<Vec<Sender<Vec<VariableWatch>>>>> = Arc::new(Mutex::new(Vec::new()));
     let channels = Arc::clone(&client_message_channels);
+    let variable_store = VariableStore::new();
     let variable_store: Arc<Mutex<VariableStore>> = Arc::new(Mutex::new(variable_store));
     let variables = Arc::clone(&variable_store);
     thread::spawn(move || {
@@ -101,19 +85,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         let variable_store = variables;
 
         loop {
-            let changes = {
-                let mut variables = variable_store.lock().unwrap();
-                interface.read_variables()
-                    .filter_map(|(name, value)| match variables.update_variable(name, value.clone()).unwrap() {
+            match lua_interface.run_game_watcher() {
+                Some(Ok(updates)) => {
+                    Some(updates)
+                }
+                Some(Err(e)) => { eprintln!("{}", e); None }
+                None => None
+            }.map(|changes|
+                changes.into_iter()
+                .filter_map(|(k, res)| match res {
+                    Ok(v) => Some((k, v)),
+                    Err(e) => { eprintln!("{}", e); None },
+                })
+                .filter_map(|(name, value)| {
+                    let mut variables = variable_store.lock().unwrap();
+                    match variables.update_variable(&name, value.clone()) {
                         true => Some(VariableWatch { name: name.to_owned(), value: value }),
                         false => None
-                    })
-                    .collect::<Vec<_>>()
-            };
-
-            for channel in client_message_channels.lock().unwrap().iter() {
-                channel.send(changes.clone()).ok();
-            }
+                    }
+                })
+                .collect::<Vec<_>>()
+            ).map(|changes|
+                for channel in client_message_channels.lock().unwrap().iter() {
+                    channel.send(changes.clone()).ok();
+                }
+            );
 
             thread::sleep(Duration::from_secs(1));
         }
@@ -157,7 +153,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
                 for command in commands {
                     let response = match ClientCommand::from(command) {
-                        ClientCommand::Sync(_) => variable_store.lock().unwrap().variable_values().map(|(name, value)| ServerCommand::var(name, value.cloned())).collect::<Vec<_>>(),
+                        ClientCommand::Sync(_) => variable_store.lock().unwrap()
+                            .variable_values()
+                            .map(|(name, value)| ServerCommand::var(name, value.clone()))
+                            .collect::<Vec<_>>(),
                         _ => todo!(),
                     };
                     socket_writer.lock().unwrap().send(&response).expect("Could not send message");

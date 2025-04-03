@@ -22,7 +22,7 @@ impl Into<JsonValue> for &Variable {
 }
 
 #[derive(Debug, Clone)]
-pub struct VariableStore(HashMap<Box<str>, Option<Variable>>);
+pub struct VariableStore(HashMap<String, JsonValue>);
 
 #[derive(Debug)]
 pub struct VariableRegisterError;
@@ -51,26 +51,22 @@ impl VariableStore {
         Self(HashMap::new())
     }
 
-    pub fn register_variable(&mut self, name: &str) -> Result<(), VariableRegisterError> {
-        if let Some(_) = self.0.get(name) {
-            return Err(VariableRegisterError);
-        }
-
-        self.0.insert(name.into(), None);
-        Ok(())
-    }
-
-    pub fn update_variable(&mut self, name: &str, value: Option<Variable>) -> Result<bool, VariableUpdateError> {
-        let entry = self.0.get_mut(name).ok_or(VariableUpdateError {})?;
-        if entry == &value {
-            Ok(false)
+    pub fn update_variable(&mut self, name: &str, value: JsonValue) -> bool {
+        let entry = self.0.remove_entry(name);
+        let (key, result) = if let Some((key, old_value)) = entry {
+            if old_value == value {
+                (key, false)
+            } else {
+                (key, true)
+            }
         } else {
-            *entry = value;
-            Ok(true)
-        }
+            (name.to_owned(), false)
+        };
+        self.0.insert(key, value);
+        result
     }
 
-    pub fn variable_values(&self) -> impl Iterator<Item = (&str, Option<&Variable>)> {
-        self.0.iter().map(|(key, var)| (key.borrow(), var.as_ref()))
+    pub fn variable_values(&self) -> impl Iterator<Item = (&str, &JsonValue)> {
+        self.0.iter().map(|(key, var)| (key.borrow(), var))
     }
 }
