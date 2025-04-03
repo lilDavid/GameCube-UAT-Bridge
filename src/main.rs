@@ -13,7 +13,6 @@ use websocket::WebSocketError;
 #[cfg(target_os = "windows")]
 use crate::connector::dolphin::DolphinConnector;
 use crate::connector::nintendont::NintendontConnector;
-use crate::uat::UAT_PORT_MAIN;
 
 #[derive(Debug, Clone)]
 struct VariableWatch {
@@ -115,7 +114,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let uat_server = Server::new(Ipv4Addr::LOCALHOST, UAT_PORT_MAIN)?;
+    let uat_server = Server::new(Ipv4Addr::LOCALHOST)?;
     for client in uat_server.accept_clients().filter_map(Result::ok) {
         let variable_store = Arc::clone(&variable_store);
         let (mut socket_reader, mut socket_writer) = client.split()?;

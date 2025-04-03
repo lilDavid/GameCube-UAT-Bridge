@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, io, net::{IpAddr, TcpListener, TcpStream}};
+use std::{error::Error, fmt::Display, io, net::{SocketAddr, IpAddr, TcpListener, TcpStream}};
 
 use command::{ClientCommand, ServerCommand};
 use json::JsonValue;
@@ -8,6 +8,7 @@ pub mod command;
 pub mod variable;
 
 pub const UAT_PORT_MAIN: u16 = 65399;
+pub const UAT_PORT_BACKUP: u16 = 44444;
 pub const UAT_PROTOCOL_VERSION: i32 = 0;
 
 pub struct Server(WsServer<NoTlsAcceptor, TcpListener>);
@@ -33,8 +34,12 @@ impl Display for IncomingConnectionError {
 impl Error for IncomingConnectionError {}
 
 impl Server {
-    pub fn new(addr: impl Into<IpAddr>, port: u16) -> Result<Self, io::Error> {
-        Ok(Self(websocket::server::sync::Server::bind((addr.into(), port))?))
+    pub fn new(addr: impl Into<IpAddr>) -> Result<Self, io::Error> {
+        let addr = addr.into();
+        Ok(Self(websocket::server::sync::Server::bind([
+            SocketAddr::new(addr, UAT_PORT_MAIN),
+            SocketAddr::new(addr, UAT_PORT_BACKUP),
+        ].as_slice())?))
     }
 
     pub fn accept_clients(self) -> impl Iterator<Item = Result<Client, IncomingConnectionError>> {
