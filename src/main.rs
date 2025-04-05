@@ -96,13 +96,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Ok(v) => Some((k, v)),
                     Err(e) => { eprintln!("{}", e); None },
                 })
-                .filter_map(|(name, value)| {
+                .filter(|(name, value)| {
                     let mut variables = variable_store.lock().unwrap();
-                    match variables.update_variable(&name, value.clone()) {
-                        true => Some(VariableWatch { name: name.to_owned(), value: value }),
-                        false => None
-                    }
+                    variables.update_variable(&name, value.clone())
                 })
+                .inspect(|(name, value)| {
+                    println!(":{} = {}", name, value)
+                })
+                .map(|(name, value)| VariableWatch { name: name.to_owned(), value: value })
                 .collect::<Vec<_>>()
             ).map(|changes|
                 for channel in client_message_channels.lock().unwrap().iter() {
