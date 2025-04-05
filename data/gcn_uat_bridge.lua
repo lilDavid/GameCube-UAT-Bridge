@@ -18,18 +18,22 @@
 ---| nil
 
 
+---@class ScriptHost
+ScriptHost = {}
+
+---@return GameInterface
+function ScriptHost:CreateGameInterface() end
+
+---@param name string
+---@param interface GameInterface
+function ScriptHost:AddGameInterface(name, interface) end
+
+
 ---@class GameCube
 GameCube = {}
 
 ---@type integer
 GameCube.BaseAddress = nil
-
----@return GameInterface
-function GameCube:CreateGameInterface() end
-
----@param name string
----@param interface GameInterface
-function GameCube:AddGameInterface(name, interface) end
 
 ---@param address integer
 ---@param size integer

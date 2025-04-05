@@ -1,9 +1,9 @@
-use std::{collections::HashMap, fs, ops::Deref, path::Path, sync::{Arc, Mutex, RwLock}};
+use std::{cell::RefCell, collections::HashMap, fs, io, ops::Deref, path::Path, rc::Rc};
 
 use json::JsonValue;
 use mlua::{FromLua, IntoLua, Lua, Table};
 
-use crate::connector::{GameCubeConnector, GameCubeConnectorError};
+use crate::connector::GameCubeConnector;
 
 
 const GCN_BASE_ADDRESS: u32 = 0x80000000;
@@ -86,108 +86,55 @@ fn convert_lua_to_json(lua: &Lua, value: &mlua::Value) -> mlua::Result<JsonValue
     }
 }
 
-struct GameCube;
-
-impl GameCube {
-    fn convert_bytes(lua: &Lua, mut bytes: Vec<u8>, ty: &str) -> mlua::Result<mlua::Value> {
-        match ty {
-            "integer" | "unsigned" => {
-                bytes.reverse();
-                bytes.extend((bytes.len()..size_of::<mlua::Integer>()).map(|_| 0));
-                match bytes[..8].try_into().map(mlua::Integer::from_le_bytes) {  // Result is big endian but the bytes are reversed
+fn convert_bytes(lua: &Lua, mut bytes: Vec<u8>, ty: &str) -> mlua::Result<mlua::Value> {
+    match ty {
+        "integer" | "unsigned" => {
+            bytes.reverse();
+            bytes.extend((bytes.len()..size_of::<mlua::Integer>()).map(|_| 0));
+            match bytes[..8].try_into().map(mlua::Integer::from_le_bytes) {  // Result is big endian but the bytes are reversed
+                Ok(i) => i.into_lua(lua),
+                Err(_) => Ok(mlua::Value::Nil),
+            }
+        },
+        "signed" => {
+            bytes.reverse();
+            if let Some(msb) = bytes.last().copied() {
+                let extension = if (msb as i8) < 0 { u8::MAX } else { 0 };
+                bytes.extend((bytes.len()..size_of::<mlua::Integer>()).map(|_| extension));
+                match bytes[..8].try_into().map(mlua::Integer::from_le_bytes) {
                     Ok(i) => i.into_lua(lua),
                     Err(_) => Ok(mlua::Value::Nil),
                 }
-            },
-            "signed" => {
-                bytes.reverse();
-                if let Some(msb) = bytes.last().copied() {
-                    let extension = if (msb as i8) < 0 { u8::MAX } else { 0 };
-                    bytes.extend((bytes.len()..size_of::<mlua::Integer>()).map(|_| extension));
-                    match bytes[..8].try_into().map(mlua::Integer::from_le_bytes) {
-                        Ok(i) => i.into_lua(lua),
-                        Err(_) => Ok(mlua::Value::Nil),
-                    }
-                } else {
-                    0.into_lua(lua)
-                }
-            },
-            "float" => {
-                match bytes.try_into().map(mlua::Number::from_be_bytes) {
-                    Ok(f) => f.into_lua(lua),
-                    Err(_) => Ok(mlua::Value::Nil),
-                }
-            },
-            _ => mlua::String::wrap(bytes).into_lua(lua),
-        }
-    }
-
-    fn create_table(interface: &LuaInterface) -> mlua::Result<Table> {
-        let table = interface.lua().create_table()?;
-
-        table.set("BaseAddress", GCN_BASE_ADDRESS)?;
-
-        table.set("CreateGameInterface", interface.lua().create_function(
-            |lua, (_,): (mlua::Value,)| GameInterface::create_table(lua)
-        )?)?;
-
-        let add_interface = interface.add_interface_fn();
-        table.set("AddGameInterface", interface.lua().create_function(
-            move |_, (_, name, value): (mlua::Value, String, GameInterface)| Ok(add_interface(name, value))
-        )?)?;
-
-        let connector = Arc::clone(&interface.connector);
-        table.set("ReadAddress", interface.lua.create_function(
-            move |lua, (_, address, size, ty): (mlua::Value, u32, u32, Option<String>)| {
-                let bytes = match connector.lock().unwrap().read_address(size, address) {
-                    Err(GameCubeConnectorError::IoError(e)) => Err(mlua::Error::from(e)),
-                    Err(GameCubeConnectorError::InvalidAddress(_)) => Ok(None),
-                    Ok(bytes) => Ok(Some(bytes)),
-                }?;
-                let bytes = match bytes {
-                    Some(bytes) => bytes,
-                    None => return Ok(mlua::Value::Nil),
-                };
-                Self::convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
+            } else {
+                0.into_lua(lua)
             }
-        )?)?;
-
-        let connector = Arc::clone(&interface.connector);
-        table.set("ReadPointerChain", interface.lua.create_function(
-            move |lua, (_, address, size, offsets, ty): (mlua::Value, u32, u32, Vec<i32>, Option<String>)| {
-                let bytes = match connector.lock().unwrap().read_pointers(size, address, &offsets) {
-                    Err(GameCubeConnectorError::IoError(e)) => Err(mlua::Error::from(e)),
-                    Err(GameCubeConnectorError::InvalidAddress(_)) => Ok(None),
-                    Ok(bytes) => Ok(Some(bytes)),
-                }?;
-                let bytes = match bytes {
-                    Some(bytes) => bytes,
-                    None => return Ok(mlua::Value::Nil),
-                };
-                Self::convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
+        },
+        "float" => {
+            match bytes.try_into().map(mlua::Number::from_be_bytes) {
+                Ok(f) => f.into_lua(lua),
+                Err(_) => Ok(mlua::Value::Nil),
             }
-        )?)?;
-
-        Ok(table)
+        },
+        _ => mlua::String::wrap(bytes).into_lua(lua),
     }
 }
 
 #[derive(Clone)]
-struct VariableStore(Arc<RwLock<Vec<(String, mlua::Result<JsonValue>)>>>);
+struct VariableStore(Rc<RefCell<Vec<(String, mlua::Result<JsonValue>)>>>);
 
 impl VariableStore {
     fn new(lua: &Lua) -> mlua::Result<(Self, Table)> {
         let table = lua.create_table()?;
 
-        let storage = Arc::new(RwLock::new(vec![]));
+        let storage = Rc::new(RefCell::new(vec![]));
 
-        let store = Self(Arc::clone(&storage));
+        let store = Self(Rc::clone(&storage));
 
         table.set("WriteVariable", lua.create_function(
             move |lua, (_, key, value,): (mlua::Value, mlua::Value, mlua::Value,)| {
                 let key = convert_lua_to_string(lua, &key)?;
                 let value = convert_lua_to_json(lua, &value);
-                Ok(storage.write().unwrap().push((key, value)))
+                Ok(storage.borrow_mut().push((key, value)))
             }
         )?)?;
 
@@ -195,7 +142,7 @@ impl VariableStore {
     }
 
     fn unwrap(self) -> Vec<(String, mlua::Result<JsonValue>)> {
-        self.0.read().unwrap().clone()
+        self.0.borrow().clone()
     }
 }
 
@@ -234,13 +181,13 @@ impl GameInterface {
         self.0.get("Slots")
     }
 
-    fn verify(&self, game_id: &str, revision: u8) -> mlua::Result<bool> {
+    fn verify(&self) -> mlua::Result<bool> {
         let verify_func: mlua::Value = self.0.get("VerifyFunc")?;
         let verify_func = match verify_func.as_function() {
             Some(f) => f,
             None => return Ok(false),
         };
-        Ok(coerce_boolean(&verify_func.call((&self.0, game_id, revision))?))
+        Ok(coerce_boolean(&verify_func.call((&self.0,))?))
     }
 
     fn run_game_watcher(&self, store: &Table) -> mlua::Result<()> {
@@ -260,64 +207,129 @@ impl FromLua for GameInterface {
     }
 }
 
+struct LuaGcnConnection {
+    gamecube_connection: Box<dyn GameCubeConnector>,
+    game_interface: Option<GameInterface>,
+}
+
+impl LuaGcnConnection {
+    fn connect(gamecube: Box<dyn GameCubeConnector>, game_interface: Option<GameInterface>) -> Self {
+        Self {
+            gamecube_connection: gamecube,
+            game_interface,
+        }
+    }
+}
+
 pub struct LuaInterface {
     lua: Lua,
-    connector: Arc<Mutex<Box<dyn GameCubeConnector + Send + Sync>>>,
-    game_interfaces: Arc<RwLock<HashMap<String, GameInterface>>>,
-    selected_interface: Option<(String, GameInterface)>,
+    game_interfaces: Rc<RefCell<HashMap<String, GameInterface>>>,
+    connection: Rc<RefCell<Option<LuaGcnConnection>>>,
 }
 
 impl LuaInterface {
-    pub fn new(connector: Box<dyn GameCubeConnector + Send + Sync>) -> mlua::Result<Self> {
+    pub fn new() -> mlua::Result<Self> {
         let lua = Lua::new();
+        let connection: Rc<RefCell<Option<LuaGcnConnection>>> = Rc::new(RefCell::new(None));
+        let game_interfaces = Rc::new(RefCell::new(HashMap::new()));
 
-        let interface = Self {
+        let script_host = lua.create_table()?;
+        script_host.set("CreateGameInterface", lua.create_function(
+            |lua, (_,): (mlua::Value,)| GameInterface::create_table(lua)
+        )?)?;
+        let interfaces = Rc::clone(&game_interfaces);
+        script_host.set("AddGameInterface", lua.create_function(
+            move |_, (_, name, value): (mlua::Value, String, GameInterface)| Ok({ interfaces.borrow_mut().insert(name, value); })
+        )?)?;
+        lua.globals().set("ScriptHost", script_host)?;
+
+        let gamecube = lua.create_table()?;
+        gamecube.set("BaseAddress", GCN_BASE_ADDRESS)?;
+        let connector = Rc::clone(&connection);
+        gamecube.set("ReadAddress", lua.create_function(
+            move |lua, (_, address, size, ty): (mlua::Value, u32, u32, Option<String>)| {
+                let mut connection = connector.borrow_mut();
+                let connection = connection.as_mut().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                let bytes = match connection.gamecube_connection.read_address(size, address) {
+                    Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
+                    Err(e) => Err(mlua::Error::from(e)),
+                    Ok(bytes) => Ok(Some(bytes)),
+                }?;
+                let bytes = match bytes {
+                    Some(bytes) => bytes,
+                    None => return Ok(mlua::Value::Nil),
+                };
+                convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
+            }
+        )?)?;
+        let connector = Rc::clone(&connection);
+        gamecube.set("ReadPointerChain", lua.create_function(
+            move |lua, (_, address, size, offsets, ty): (mlua::Value, u32, u32, Vec<i32>, Option<String>)| {
+                let mut connection = connector.borrow_mut();
+                let connection = connection.as_mut().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                let bytes = match connection.gamecube_connection.read_pointers(size, address, &offsets) {
+                    Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
+                    Err(e) => Err(mlua::Error::from(e)),
+                    Ok(bytes) => Ok(Some(bytes)),
+                }?;
+                let bytes = match bytes {
+                    Some(bytes) => bytes,
+                    None => return Ok(mlua::Value::Nil),
+                };
+                convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
+            }
+        )?)?;
+        lua.globals().set("GameCube", gamecube)?;
+
+        Ok(Self {
             lua,
-            connector: Arc::new(Mutex::new(connector)),
-            game_interfaces: Arc::new(RwLock::new(HashMap::new())),
-            selected_interface: None,
-        };
-
-        interface.lua.globals().set("GameCube", GameCube::create_table(&interface)?)?;
-
-        Ok(interface)
+            game_interfaces,
+            connection,
+        })
     }
 
-    fn lua(&self) -> &Lua {
-        &self.lua
-    }
-
-    fn add_interface_fn(&self) -> impl Fn(String, GameInterface) {
-        let interfaces = Arc::clone(&self.game_interfaces);
-        move |name, value| { interfaces.write().unwrap().insert(name, value); }
-    }
-
-    pub fn run_script(&mut self, path: impl AsRef<Path>) -> mlua::Result<()> {
+    pub fn run_script(&self, path: impl AsRef<Path>) -> mlua::Result<()> {
         let data = fs::read(path)?;
         let script = self.lua.load(data);
         script.exec()?;
         Ok(())
     }
 
-    pub fn select_game_interface(&mut self) -> Option<(&str, &GameInterface)> {
-        let interfaces = self.game_interfaces.read().unwrap();
-        self.selected_interface = interfaces.iter()
-            .filter_map(|(name, interface)| match interface.verify("GM8E01", 0) {
+    pub fn connect(&self, connector: Box<dyn GameCubeConnector>) -> Result<(String, GameInterface), Box<dyn GameCubeConnector>> {
+        self.disconnect();
+
+        self.connection.borrow_mut().replace(LuaGcnConnection::connect(connector, None) );
+
+        let interfaces = self.game_interfaces.borrow();
+        let interface = interfaces.iter()
+            .filter_map(|(name, interface)| match interface.verify() {
                 Ok(true) => Some((name, interface)),
                 Ok(false) => None,
                 Err(e) => { eprintln!("{}", e); None },
             })
             .next()
             .map(|(k, v)| (k.clone(), v.clone()));
-        self.selected_game_interface()
+
+        let mut connection = self.connection.borrow_mut();
+        match interface {
+            Some((name, interface)) => {
+                connection.as_mut().expect("GCN connection was unexpectedly set None").game_interface.replace(interface.clone());
+                Ok((name, interface))
+            }
+            None => {
+                let connection = connection.take().expect("GCN connection was unexpectedly set None").gamecube_connection;
+                Err(connection)
+            }
+        }
     }
 
-    pub fn selected_game_interface(&self) -> Option<(&str, &GameInterface)> {
-        self.selected_interface.as_ref().map(|(k, v)| (k.as_ref(), v))
+    pub fn disconnect(&self) {
+        self.connection.borrow_mut().take();
     }
 
     pub fn run_game_watcher(&self) -> Option<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>> {
-        self.selected_game_interface().map(|(_, interface)| {
+        let interface = self.connection.borrow_mut().as_mut().and_then(|connection| connection.game_interface.clone());
+        interface.map(|interface| {
             let (store, table) = VariableStore::new(&self.lua)?;
             interface.run_game_watcher(&table)?;
             Ok(store.unwrap())

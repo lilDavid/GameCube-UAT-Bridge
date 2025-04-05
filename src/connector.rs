@@ -1,36 +1,13 @@
-#[cfg(target_os = "windows")]
 pub mod dolphin;
 pub mod nintendont;
 
-use std::{error::Error, fmt::Display, io};
+use std::io;
 
-#[derive(Debug)]
-pub enum GameCubeConnectorError {
-    IoError(io::Error),
-    InvalidAddress(u32),
-}
-
-impl Display for GameCubeConnectorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::IoError(err) => err.fmt(f),
-            Self::InvalidAddress(addr) => write!(f, "Invalid address: {}", addr)
-        }
-    }
-}
-
-impl Error for GameCubeConnectorError {}
-
-impl From<io::Error> for GameCubeConnectorError {
-    fn from(err: io::Error) -> Self {
-        Self::IoError(err)
-    }
-}
 
 pub trait GameCubeConnector {
-    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, GameCubeConnectorError>;
+    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error>;
 
-    fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, GameCubeConnectorError> {
+    fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
         // Empty => read <size> bytes at <address>
         // 1 item => result <- read 4 bytes at <address>; read <size> bytes at <result> + <offset>
 

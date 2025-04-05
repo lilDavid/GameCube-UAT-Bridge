@@ -2,26 +2,19 @@ mod connector;
 mod lua;
 mod uat;
 
-use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Sender}, Arc, Mutex}, thread, time::Duration};
+use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Receiver, Sender, TryRecvError}, Arc, Mutex, RwLock}, thread::{self, JoinHandle}, time::Duration};
 
 use connector::GameCubeConnector;
-use json::JsonValue;
 use lua::LuaInterface;
-use uat::{command::{ClientCommand, ServerCommand}, variable::VariableStore, MessageResponse, Server};
-use websocket::WebSocketError;
+use uat::{command::{ClientCommand, InfoCommand, ServerCommand}, variable::VariableStore, Client, MessageReadError, MessageResponse, Server};
+use websocket::{WebSocketError, WebSocketResult};
 
 #[cfg(target_os = "windows")]
 use crate::connector::dolphin::DolphinConnector;
 use crate::connector::nintendont::NintendontConnector;
 
-#[derive(Debug, Clone)]
-struct VariableWatch {
-    name: String,
-    value: JsonValue,
-}
-
 #[cfg(target_os = "windows")]
-fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send + Sync>, &'static str> {
+fn connect_to_dolphin() -> Box<dyn GameCubeConnector> {
     let result = loop {
         println!("Connecting to Dolphin...");
         match DolphinConnector::new() {
@@ -30,18 +23,18 @@ fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send + Sync>, &
         }
     };
     println!("Connected");
-    Ok(result)
+    result
 }
 
 #[cfg(not(target_os = "windows"))]
-fn get_dolphin_connector() -> Result<Box<dyn GameCubeConnector + Send + Sync>, &'static str> {
-    Err("Dolphin is not supported on this platform")
+fn connect_to_dolphin() -> Box<dyn GameCubeConnector> {
+    panic!()
 }
 
-fn get_nintendont_connector(address: &str) -> Box<dyn GameCubeConnector + Send + Sync> {
+fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnector> {
     println!("Connecting to Nintendont at {}...", address);
     let result = loop {
-        match NintendontConnector::new(IpAddr::from_str(address).unwrap()) {
+        match NintendontConnector::new(address) {
             Ok(nintendont) => break Box::new(nintendont),
             Err(err) => {eprintln!("{}", err); thread::sleep(Duration::from_secs(1))},
         }
@@ -50,46 +43,120 @@ fn get_nintendont_connector(address: &str) -> Box<dyn GameCubeConnector + Send +
     result
 }
 
+fn run_uat_server(
+    uat_server: Server,
+    client_handles: Arc<Mutex<Vec<(Sender<Vec<ServerCommand>>, JoinHandle<WebSocketResult<()>>)>>>,
+    variable_store: &Arc<Mutex<VariableStore>>,
+    info_cache: &RwLock<Option<InfoCommand>>,
+) -> WebSocketResult<()> {
+    for mut client in uat_server.accept_clients().filter_map(Result::ok) {
+        let variable_store = Arc::clone(variable_store);
+        let (command_sender, command_receiver) = channel();
+        if let Some(info) = info_cache.read().unwrap().as_ref() {
+            client.send(&[ServerCommand::Info(info.clone())])?;
+        }
+
+        let handle = thread::spawn(move || {
+            serve_uat_client(client, command_receiver, &variable_store)
+        });
+        client_handles.lock().unwrap().push((command_sender, handle));
+    }
+
+    Ok(())
+}
+
+fn serve_uat_client(mut client: Client, server_messages: Receiver<Vec<ServerCommand>>, variable_store: &Mutex<VariableStore>) -> WebSocketResult<()> {
+    loop {
+        match server_messages.try_recv() {
+            Ok(server_commands) => client.send(&server_commands)?,
+            Err(TryRecvError::Empty) => (),
+            Err(TryRecvError::Disconnected) => break,
+        }
+
+        let commands = match client.receive() {
+            Ok(commands) => commands,
+            Err(MessageReadError::SocketError(WebSocketError::IoError(err))) if err.kind() == ErrorKind::WouldBlock => continue,
+            Err(err) => match client.handle_error(err) {
+                MessageResponse::Continue => continue,
+                MessageResponse::Stop(err) => {
+                    if let Some(e) = err { eprintln!("{}", e); }
+                    break;
+                }
+            }
+        };
+        for command in commands {
+            let response = match ClientCommand::from(command) {
+                ClientCommand::Sync(_) => variable_store.lock().unwrap()
+                    .variable_values()
+                    .map(|(name, value)| ServerCommand::var(name, value.clone()))
+                    .collect::<Vec<_>>(),
+                _ => todo!(),
+            };
+            client.send(&response)?
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut argv = env::args();
     argv.next();  // Consume argv[0]
 
     let target = argv.next().ok_or("Need IP Address or to specify Dolphin")?;
 
-    let connector: Box<dyn GameCubeConnector + Send + Sync> = if target.to_lowercase() == "dolphin" {
-        get_dolphin_connector().unwrap()
+    let connection_factory: Box<dyn Fn() -> Box<dyn GameCubeConnector>> = if target.to_lowercase() == "dolphin" {
+        if cfg!(target_os = "windows") {
+            Box::new(connect_to_dolphin)
+        } else {
+            Err("Dolphin is not supported on this platform")?
+        }
     } else {
-        get_nintendont_connector(&target)
+        let address = IpAddr::from_str(&target)?;
+        Box::new(move || connect_to_nintendont(address))
     };
 
-    let mut lua_interface = LuaInterface::new(connector)?;
+    let lua_interface = LuaInterface::new()?;
     for arg in argv {
         lua_interface.run_script(arg)?;
     }
 
-    let interface = match lua_interface.select_game_interface() {
-        Some((name, interface)) => { println!("Found interface {} for {}", name, interface.name()?.unwrap_or_else(|| "<nil>".into())); interface },
-        None => Err("No interface found")?
-    };
-
-    let game_info_command = vec![ServerCommand::info(interface.name()?.as_deref(), interface.version()?.as_deref())];
-
-    let client_message_channels: Arc<Mutex<Vec<Sender<Vec<VariableWatch>>>>> = Arc::new(Mutex::new(Vec::new()));
-    let channels = Arc::clone(&client_message_channels);
+    let info_cache: Arc<RwLock<Option<InfoCommand>>> = Arc::new(RwLock::new(None));
     let variable_store = VariableStore::new();
     let variable_store: Arc<Mutex<VariableStore>> = Arc::new(Mutex::new(variable_store));
-    let variables = Arc::clone(&variable_store);
-    thread::spawn(move || {
-        let client_message_channels = channels;
-        let variable_store = variables;
 
-        loop {
-            match lua_interface.run_game_watcher() {
-                Some(Ok(updates)) => {
-                    Some(updates)
+    let uat_server = Server::new(Ipv4Addr::LOCALHOST)?;
+    let client_handles = Arc::new(Mutex::new(Vec::new()));
+    let info = Arc::clone(&info_cache);
+    let variables = Arc::clone(&variable_store);
+    let handles = Arc::clone(&client_handles);
+    thread::spawn(move || {
+        run_uat_server(uat_server, handles, &variables, &info)
+    });
+
+    loop {
+        let connection = connection_factory();
+        match lua_interface.connect(connection) {
+            Ok((name, interface)) => {
+                println!("Found interface {} for {}", name, interface.name()?.unwrap_or_else(|| "<nil>".into()));
+                let mut info_cache = info_cache.write().unwrap();
+                let info_command = InfoCommand::new(interface.name()?.as_deref(), interface.version()?.as_deref());
+                info_cache.replace(info_command.clone());
+                let mut handles = client_handles.lock().unwrap();
+                handles.retain(|(_, thread)| !thread.is_finished());
+                for (channel, _) in handles.iter() {
+                    channel.send(vec![ServerCommand::Info(info_command.clone())]).ok();
                 }
-                Some(Err(e)) => { eprintln!("{}", e); None }
-                None => None
+            },
+            Err(_) => {
+                println!("No interface found for this game");
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+
+        while let Some(result) = lua_interface.run_game_watcher() {
+            match result {
+                Ok(updates) => Some(updates),
+                Err(e) => { eprintln!("{}", e); break }
             }.map(|changes|
                 changes.into_iter()
                 .filter_map(|(k, res)| match res {
@@ -103,69 +170,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .inspect(|(name, value)| {
                     println!(":{} = {}", name, value)
                 })
-                .map(|(name, value)| VariableWatch { name: name.to_owned(), value: value })
+                .map(|(name, value)| ServerCommand::var(&name, value))
                 .collect::<Vec<_>>()
-            ).map(|changes|
-                for channel in client_message_channels.lock().unwrap().iter() {
+            ).map(|changes| {
+                let mut handles = client_handles.lock().unwrap();
+                handles.retain(|(_, thread)| !thread.is_finished());
+                for (channel, _) in handles.iter() {
                     channel.send(changes.clone()).ok();
-                }
-            );
-
-            thread::sleep(Duration::from_secs(1));
-        }
-    });
-
-    let uat_server = Server::new(Ipv4Addr::LOCALHOST)?;
-    for client in uat_server.accept_clients().filter_map(Result::ok) {
-        let variable_store = Arc::clone(&variable_store);
-        let (mut socket_reader, mut socket_writer) = client.split()?;
-        let (item_sender, item_receiver) = channel();
-        client_message_channels.lock().unwrap().push(item_sender);
-
-        let info = game_info_command.clone();
-        thread::spawn(move || {
-            socket_writer.send(&info).unwrap();
-
-            let socket_writer = Arc::new(Mutex::new(socket_writer));
-            let writer = Arc::clone(&socket_writer);
-            thread::spawn(move || {
-                for received in item_receiver {
-                    let message = received.into_iter().map(|watch| ServerCommand::var(&watch.name, watch.value)).collect::<Vec::<_>>();
-                    if let Err(WebSocketError::IoError(err)) = writer.lock().unwrap().send(&message) {
-                        if err.kind() != ErrorKind::BrokenPipe {
-                            eprintln!("{}", err);
-                        }
-                        break;
-                    }
                 }
             });
 
-            loop {
-                let commands = match socket_reader.receive() {
-                    Ok(commands) => commands,
-                    Err(err) => match socket_writer.lock().unwrap().handle_error(err) {
-                        MessageResponse::Continue => continue,
-                        MessageResponse::Stop(err) => {
-                            if let Some(e) = err { eprintln!("{}", e); }
-                            break;
-                        }
-                    }
-                };
-                for command in commands {
-                    let response = match ClientCommand::from(command) {
-                        ClientCommand::Sync(_) => variable_store.lock().unwrap()
-                            .variable_values()
-                            .map(|(name, value)| ServerCommand::var(name, value.clone()))
-                            .collect::<Vec<_>>(),
-                        _ => todo!(),
-                    };
-                    socket_writer.lock().unwrap().send(&response).expect("Could not send message");
-                }
-            }
+            thread::sleep(Duration::from_secs(1));
+        }
 
-            socket_writer.lock().map(|w| w.shutdown_all()).ok();
-        });
+        println!("Disconnected");
     }
-
-    Ok(())
 }
