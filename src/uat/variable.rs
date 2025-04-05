@@ -53,14 +53,9 @@ impl VariableStore {
 
     pub fn update_variable(&mut self, name: &str, value: JsonValue) -> bool {
         let entry = self.0.remove_entry(name);
-        let (key, result) = if let Some((key, old_value)) = entry {
-            if old_value == value {
-                (key, false)
-            } else {
-                (key, true)
-            }
-        } else {
-            (name.to_owned(), false)
+        let (key, result) = match entry {
+            Some((key, old_value)) => (key, old_value != value),
+            None => (name.to_owned(), true),
         };
         self.0.insert(key, value);
         result
