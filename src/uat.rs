@@ -42,6 +42,10 @@ impl Server {
         ].as_slice())?))
     }
 
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.0.local_addr()
+    }
+
     pub fn accept_clients(self) -> impl Iterator<Item = Result<Client, IncomingConnectionError>> {
         self.0.into_iter().map(|connection| {
             let connection = connection.or_else(|e| Err(IncomingConnectionError::InvalidConnection(e)))?;

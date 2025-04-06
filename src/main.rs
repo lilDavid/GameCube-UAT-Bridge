@@ -129,6 +129,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let info = Arc::clone(&info_cache);
     let variables = Arc::clone(&variable_store);
     let handles = Arc::clone(&client_handles);
+    println!("Listening for UAT clients on port {}", uat_server.local_addr()?.port());
     thread::spawn(move || {
         run_uat_server(uat_server, handles, &variables, &info)
     });
