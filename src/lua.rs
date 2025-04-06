@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, fs, io, ops::Deref, path::Path, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, error::Error, fmt::Display, fs, io, ops::Deref, path::Path, rc::Rc};
 
 use json::JsonValue;
 use mlua::{FromLua, IntoLua, Lua, Table};
@@ -332,13 +332,41 @@ impl LuaInterface {
         self.connection.borrow_mut().take();
     }
 
-    pub fn run_game_watcher(&self) -> Option<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>> {
+    pub fn run_game_watcher(&self) -> Result<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>, GameWatcherError> {
         let connection = self.connection.borrow();
-        let interface = connection.as_ref().and_then(|connection| connection.game_interface.as_ref());
-        interface.map(|interface| {
-            let (store, table) = VariableStore::new(&self.lua)?;
-            interface.run_game_watcher(&table)?;
-            Ok(store.unwrap())
-        })
+        let interface = connection.as_ref()
+            .and_then(|connection| connection.game_interface.as_ref()).ok_or(GameWatcherError::NotConnected)?;
+
+        match interface.verify() {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(GameWatcherError::VerificationFailed),
+            Err(err) => Err(GameWatcherError::VerificationError(err)),
+        }?;
+
+        Ok(VariableStore::new(&self.lua)
+            .and_then(|(store, table)| interface.run_game_watcher(&table).map(|_| store))
+            .map(VariableStore::unwrap))
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum GameWatcherError {
+    NotConnected,
+    VerificationFailed,
+    VerificationError(mlua::Error),
+}
+
+impl Display for GameWatcherError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GameWatcherError::NotConnected => "no interface is active".fmt(f),
+            GameWatcherError::VerificationFailed => "active interface failed to verify current game".fmt(f),
+            GameWatcherError::VerificationError(err) => {
+                "active interface encountered an error while verifying current game: ".fmt(f)?;
+                err.fmt(f)
+            }
+        }
+    }
+}
+
+impl Error for GameWatcherError {}

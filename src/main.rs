@@ -5,7 +5,7 @@ mod uat;
 use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Receiver, Sender, TryRecvError}, Arc, Mutex, RwLock}, thread::{self, JoinHandle}, time::Duration};
 
 use connection::GameCubeConnection;
-use lua::LuaInterface;
+use lua::{GameWatcherError, LuaInterface};
 use uat::{command::{ClientCommand, InfoCommand, ServerCommand}, variable::VariableStore, Client, MessageReadError, MessageResponse, Server};
 use websocket::{WebSocketError, WebSocketResult};
 
@@ -153,7 +153,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        while let Some(result) = lua_interface.run_game_watcher() {
+        loop {
+            let result = match lua_interface.run_game_watcher() {
+                Ok(result) => result,
+                Err(GameWatcherError::NotConnected) => break,
+                Err(GameWatcherError::VerificationFailed) => {
+                    println!("Current interface failed to re-verify, disconnecting.");
+                    break
+                }
+                Err(GameWatcherError::VerificationError(err)) => {
+                    println!("{}", err);
+                    println!("Current interface encountered an error while re-verifying, disconnecting.");
+                    break
+                }
+            };
+
             match result {
                 Ok(updates) => Some(updates),
                 Err(e) => { eprintln!("{}", e); break }
