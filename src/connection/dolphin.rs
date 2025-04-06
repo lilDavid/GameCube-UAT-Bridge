@@ -3,17 +3,17 @@ use std::io;
 #[cfg(target_os = "windows")]
 use dolphin_memory::Dolphin;
 
-use crate::connector::GameCubeConnector;
+use crate::connection::GameCubeConnection;
 
 #[cfg(target_os = "windows")]
-pub struct DolphinConnector {
+pub struct DolphinConnection {
     dolphin: Dolphin
 }
 
 #[cfg(not(target_os = "windows"))]
-pub enum DolphinConnector {}
+pub enum DolphinConnection {}
 
-impl DolphinConnector {
+impl DolphinConnection {
     #[cfg(target_os = "windows")]
     pub fn new() -> Result<Self, io::Error> {
         let dolphin = Dolphin::new().map_err(|process_error| io::Error::new(io::ErrorKind::NotFound, process_error))?;
@@ -28,7 +28,7 @@ impl DolphinConnector {
 }
 
 #[cfg(target_os = "windows")]
-impl GameCubeConnector for DolphinConnector {
+impl GameCubeConnection for DolphinConnection {
     fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
         self.read_pointers(size, address, &[])
     }
@@ -45,7 +45,7 @@ impl GameCubeConnector for DolphinConnector {
 }
 
 #[cfg(not(target_os = "windows"))]
-impl GameCubeConnector for DolphinConnector {
+impl GameCubeConnection for DolphinConnection {
     fn read_address(&mut self, _: u32, _: u32) -> Result<Vec<u8>, io::Error> {
         unreachable!()
     }

@@ -1,6 +1,6 @@
 use std::{io::{self, ErrorKind, Read, Write}, net::{IpAddr, TcpStream}};
 
-use super::GameCubeConnector;
+use super::GameCubeConnection;
 
 struct Op {
     address_index: u8,
@@ -88,12 +88,12 @@ impl NitendontConnectionInfo {
 }
 
 #[allow(dead_code)]
-pub struct NintendontConnector {
+pub struct NintendontConnection {
     socket: TcpStream,
     connection_info: NitendontConnectionInfo,
 }
 
-impl NintendontConnector {
+impl NintendontConnection {
     const PORT: u16 = 43673;
 
     pub fn new(ip_addr: IpAddr) -> Result<Self, io::Error> {
@@ -136,7 +136,7 @@ impl NintendontConnector {
     }
 }
 
-impl GameCubeConnector for NintendontConnector {
+impl GameCubeConnection for NintendontConnection {
     fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
         let residual = address % 4;
         let size = size + residual;

@@ -4,7 +4,7 @@ pub mod nintendont;
 use std::io;
 
 
-pub trait GameCubeConnector {
+pub trait GameCubeConnection {
     fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error>;
 
     fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {

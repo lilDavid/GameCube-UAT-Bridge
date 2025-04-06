@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, fs, io, ops::Deref, path::Path, r
 use json::JsonValue;
 use mlua::{FromLua, IntoLua, Lua, Table};
 
-use crate::connector::GameCubeConnector;
+use crate::connection::GameCubeConnection;
 
 
 const GCN_BASE_ADDRESS: u32 = 0x80000000;
@@ -208,12 +208,12 @@ impl FromLua for GameInterface {
 }
 
 struct LuaGcnConnection {
-    gamecube_connection: Box<dyn GameCubeConnector>,
+    gamecube_connection: Box<dyn GameCubeConnection>,
     game_interface: Option<GameInterface>,
 }
 
 impl LuaGcnConnection {
-    fn connect(gamecube: Box<dyn GameCubeConnector>, game_interface: Option<GameInterface>) -> Self {
+    fn connect(gamecube: Box<dyn GameCubeConnection>, game_interface: Option<GameInterface>) -> Self {
         Self {
             gamecube_connection: gamecube,
             game_interface,
@@ -245,10 +245,10 @@ impl LuaInterface {
 
         let gamecube = lua.create_table()?;
         gamecube.set("BaseAddress", GCN_BASE_ADDRESS)?;
-        let connector = Rc::clone(&connection);
+        let connect = Rc::clone(&connection);
         gamecube.set("ReadAddress", lua.create_function(
             move |lua, (_, address, size, ty): (mlua::Value, u32, u32, Option<String>)| {
-                let mut connection = connector.borrow_mut();
+                let mut connection = connect.borrow_mut();
                 let connection = connection.as_mut().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
                 let bytes = match connection.gamecube_connection.read_address(size, address) {
                     Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
@@ -262,10 +262,10 @@ impl LuaInterface {
                 convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
             }
         )?)?;
-        let connector = Rc::clone(&connection);
+        let connect = Rc::clone(&connection);
         gamecube.set("ReadPointerChain", lua.create_function(
             move |lua, (_, address, size, offsets, ty): (mlua::Value, u32, u32, Vec<i32>, Option<String>)| {
-                let mut connection = connector.borrow_mut();
+                let mut connection = connect.borrow_mut();
                 let connection = connection.as_mut().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
                 let bytes = match connection.gamecube_connection.read_pointers(size, address, &offsets) {
                     Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
@@ -295,10 +295,10 @@ impl LuaInterface {
         Ok(())
     }
 
-    pub fn connect(&self, connector: Box<dyn GameCubeConnector>) -> Result<(String, GameInterface), Box<dyn GameCubeConnector>> {
+    pub fn connect(&self, connection: Box<dyn GameCubeConnection>) -> Result<(String, GameInterface), Box<dyn GameCubeConnection>> {
         self.disconnect();
 
-        self.connection.borrow_mut().replace(LuaGcnConnection::connect(connector, None) );
+        self.connection.borrow_mut().replace(LuaGcnConnection::connect(connection, None) );
 
         let interfaces = self.game_interfaces.borrow();
         let interface = interfaces.iter()

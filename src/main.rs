@@ -1,23 +1,23 @@
-mod connector;
+mod connection;
 mod lua;
 mod uat;
 
 use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Receiver, Sender, TryRecvError}, Arc, Mutex, RwLock}, thread::{self, JoinHandle}, time::Duration};
 
-use connector::GameCubeConnector;
+use connection::GameCubeConnection;
 use lua::LuaInterface;
 use uat::{command::{ClientCommand, InfoCommand, ServerCommand}, variable::VariableStore, Client, MessageReadError, MessageResponse, Server};
 use websocket::{WebSocketError, WebSocketResult};
 
 #[cfg(target_os = "windows")]
-use crate::connector::dolphin::DolphinConnector;
-use crate::connector::nintendont::NintendontConnector;
+use crate::connection::dolphin::DolphinConnection;
+use crate::connection::nintendont::NintendontConnection;
 
 #[cfg(target_os = "windows")]
-fn connect_to_dolphin() -> Box<dyn GameCubeConnector> {
+fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
     let result = loop {
         println!("Connecting to Dolphin...");
-        match DolphinConnector::new() {
+        match DolphinConnection::new() {
             Ok(dolphin) => break Box::new(dolphin),
             Err(err) => {eprintln!("{}", err); thread::sleep(Duration::from_secs(1))},
         }
@@ -27,14 +27,14 @@ fn connect_to_dolphin() -> Box<dyn GameCubeConnector> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn connect_to_dolphin() -> Box<dyn GameCubeConnector> {
+fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
     panic!()
 }
 
-fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnector> {
+fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnection> {
     println!("Connecting to Nintendont at {}...", address);
     let result = loop {
-        match NintendontConnector::new(address) {
+        match NintendontConnection::new(address) {
             Ok(nintendont) => break Box::new(nintendont),
             Err(err) => {eprintln!("{}", err); thread::sleep(Duration::from_secs(1))},
         }
@@ -104,7 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let target = argv.next().ok_or("Need IP Address or to specify Dolphin")?;
 
-    let connection_factory: Box<dyn Fn() -> Box<dyn GameCubeConnector>> = if target.to_lowercase() == "dolphin" {
+    let connection_factory: Box<dyn Fn() -> Box<dyn GameCubeConnection>> = if target.to_lowercase() == "dolphin" {
         if cfg!(target_os = "windows") {
             Box::new(connect_to_dolphin)
         } else {
