@@ -248,8 +248,8 @@ impl LuaInterface {
         let connect = Rc::clone(&connection);
         gamecube.set("ReadAddress", lua.create_function(
             move |lua, (_, address, size, ty): (mlua::Value, u32, u32, Option<String>)| {
-                let mut connection = connect.borrow_mut();
-                let connection = connection.as_mut().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                let connection = connect.borrow();
+                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
                 let bytes = match connection.gamecube_connection.read_address(size, address) {
                     Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
                     Err(e) => Err(mlua::Error::from(e)),
@@ -265,8 +265,8 @@ impl LuaInterface {
         let connect = Rc::clone(&connection);
         gamecube.set("ReadPointerChain", lua.create_function(
             move |lua, (_, address, size, offsets, ty): (mlua::Value, u32, u32, Vec<i32>, Option<String>)| {
-                let mut connection = connect.borrow_mut();
-                let connection = connection.as_mut().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                let connection = connect.borrow();
+                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
                 let bytes = match connection.gamecube_connection.read_pointers(size, address, &offsets) {
                     Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
                     Err(e) => Err(mlua::Error::from(e)),
@@ -328,7 +328,8 @@ impl LuaInterface {
     }
 
     pub fn run_game_watcher(&self) -> Option<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>> {
-        let interface = self.connection.borrow_mut().as_mut().and_then(|connection| connection.game_interface.clone());
+        let connection = self.connection.borrow();
+        let interface = connection.as_ref().and_then(|connection| connection.game_interface.as_ref());
         interface.map(|interface| {
             let (store, table) = VariableStore::new(&self.lua)?;
             interface.run_game_watcher(&table)?;

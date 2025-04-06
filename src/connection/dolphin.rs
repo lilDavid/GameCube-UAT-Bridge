@@ -29,11 +29,11 @@ impl DolphinConnection {
 
 #[cfg(target_os = "windows")]
 impl GameCubeConnection for DolphinConnection {
-    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
+    fn read_address(&self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
         self.read_pointers(size, address, &[])
     }
 
-    fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
+    fn read_pointers(&self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
         // For some reason, passing an empty Vec instead of None causes read() to always return a null address error
         let offsets = if offsets.len() == 0 {
             None
@@ -46,11 +46,11 @@ impl GameCubeConnection for DolphinConnection {
 
 #[cfg(not(target_os = "windows"))]
 impl GameCubeConnection for DolphinConnection {
-    fn read_address(&mut self, _: u32, _: u32) -> Result<Vec<u8>, io::Error> {
+    fn read_address(&self, _: u32, _: u32) -> Result<Vec<u8>, io::Error> {
         unreachable!()
     }
 
-    fn read_pointers(&mut self, _: u32, _: u32, _: &[i32]) -> Result<Vec<u8>, io::Error> {
+    fn read_pointers(&self, _: u32, _: u32, _: &[i32]) -> Result<Vec<u8>, io::Error> {
         unreachable!()
     }
 }

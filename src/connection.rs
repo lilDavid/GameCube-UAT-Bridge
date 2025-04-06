@@ -5,9 +5,9 @@ use std::io;
 
 
 pub trait GameCubeConnection {
-    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error>;
+    fn read_address(&self, size: u32, address: u32) -> Result<Vec<u8>, io::Error>;
 
-    fn read_pointers(&mut self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
+    fn read_pointers(&self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
         // Empty => read <size> bytes at <address>
         // 1 item => result <- read 4 bytes at <address>; read <size> bytes at <result> + <offset>
 

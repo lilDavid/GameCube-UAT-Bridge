@@ -1,4 +1,4 @@
-use std::{io::{self, ErrorKind, Read, Write}, net::{IpAddr, TcpStream}};
+use std::{cell::RefCell, io::{self, ErrorKind, Read, Write}, net::{IpAddr, TcpStream}};
 
 use super::GameCubeConnection;
 
@@ -89,7 +89,7 @@ impl NitendontConnectionInfo {
 
 #[allow(dead_code)]
 pub struct NintendontConnection {
-    socket: TcpStream,
+    socket: RefCell<TcpStream>,
     connection_info: NitendontConnectionInfo,
 }
 
@@ -97,12 +97,12 @@ impl NintendontConnection {
     const PORT: u16 = 43673;
 
     pub fn new(ip_addr: IpAddr) -> Result<Self, io::Error> {
-        let mut socket = TcpStream::connect((ip_addr, Self::PORT))?;
-        let connection_info = NitendontConnectionInfo::get(&mut socket)?;
+        let socket = RefCell::new(TcpStream::connect((ip_addr, Self::PORT))?);
+        let connection_info = NitendontConnectionInfo::get(&mut socket.borrow_mut())?;
         Ok(Self {socket, connection_info})
     }
 
-    fn send_socket(&mut self, addresses: &[u32], ops: &[Op]) -> Result<Vec<u8>, io::Error> {
+    fn send_socket(&self, addresses: &[u32], ops: &[Op]) -> Result<Vec<u8>, io::Error> {
         let mut data: Vec<u8> = vec![
             0,
             ops.len().try_into().map_err(|_| io::Error::new(ErrorKind::InvalidInput, "Too many operations provided"))?,
@@ -114,7 +114,7 @@ impl NintendontConnection {
             data.extend_from_slice(&op.to_bytes());
         }
 
-        let response = write_to_socket(&mut self.socket, &data)?;
+        let response = write_to_socket(&mut self.socket.borrow_mut(), &data)?;
 
         let mut last_validation_index = 0;
         for i in 0..ops.len() {
@@ -127,7 +127,7 @@ impl NintendontConnection {
         Ok(Vec::from(&response[last_validation_index + 1 ..]))
     }
 
-    fn read_memory(&mut self, ops: &[u32]) -> Result<Vec<u8>, io::Error> {
+    fn read_memory(&self, ops: &[u32]) -> Result<Vec<u8>, io::Error> {
         let mut addresses = Vec::new();
         for i in 0..ops.len() {
             addresses.push(Op::new(i as u8, None))
@@ -137,7 +137,7 @@ impl NintendontConnection {
 }
 
 impl GameCubeConnection for NintendontConnection {
-    fn read_address(&mut self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
+    fn read_address(&self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
         let residual = address % 4;
         let size = size + residual;
         let address = address - residual;
