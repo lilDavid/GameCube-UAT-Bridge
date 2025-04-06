@@ -1,8 +1,11 @@
+use std::fmt::Display;
+
 use json::{object, JsonValue};
 
 use crate::uat::UAT_PROTOCOL_VERSION;
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct SyncCommand {
     slot: Option<String>,
 }
@@ -19,20 +22,23 @@ impl SyncCommand {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum ClientCommand {
     Sync(SyncCommand),
-    Invalid,
 }
 
-impl From<JsonValue> for ClientCommand {
-    fn from(value: JsonValue) -> Self {
+impl TryFrom<JsonValue> for ClientCommand {
+    type Error = ErrorReplyCommand;
+
+    fn try_from(value: JsonValue) -> Result<Self, Self::Error> {
         if let JsonValue::Object(obj) = value {
             match obj["cmd"].as_str() {
-                Some("Sync") => Self::Sync(SyncCommand { slot: obj["slot"].as_str().map(String::from) }),
-                _ => Self::Invalid,
+                Some("Sync") => Ok(Self::Sync(SyncCommand::with_slot(obj["slot"].as_str().map(String::from)))),
+                Some(s) => Err(ErrorReplyCommand::new(s, ErrorReplyReason::UnknownCmd)),
+                None => Err(ErrorReplyCommand::new("", ErrorReplyReason::BadValue)),
             }
         } else {
-            Self::Invalid
+            Err(ErrorReplyCommand::new("", ErrorReplyReason::BadValue))
         }
     }
 }
@@ -113,19 +119,58 @@ impl Into<JsonValue> for VarCommand {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorReplyReason {
+    UnknownCmd,
+    MissingArgument,
+    BadValue,
+    Unknown,
+}
+
+impl Display for ErrorReplyReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownCmd => "unknown cmd".fmt(f),
+            Self::MissingArgument => "missing argument".fmt(f),
+            Self::BadValue => "bad value".fmt(f),
+            Self::Unknown => "unknown".fmt(f),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ErrorReplyCommand {
+    name: String,
+    argument: Option<String>,
+    reason: ErrorReplyReason,
+    description: Option<String>,
 }
 
 impl ErrorReplyCommand {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(name: &str, reason: ErrorReplyReason) -> Self {
+        Self::with_argument_and_description(name, None, reason, None)
+    }
+
+    pub fn with_argument_and_description(name: &str, argument: Option<&str>, reason: ErrorReplyReason, description: Option<&str>) -> Self {
+        Self {
+            name: name.to_owned(),
+            argument: argument.map(str::to_owned),
+            reason,
+            description: description.map(str::to_owned),
+        }
     }
 }
 
 impl Into<JsonValue> for ErrorReplyCommand {
     fn into(self) -> JsonValue {
-        todo!()
+        let mut value = object!{
+            name: self.name,
+            reason: self.reason.to_string(),
+        };
+        self.argument.map(|arg| value["argument"] = arg.into());
+        self.description.map(|desc| value["description"] = desc.into());
+        value
     }
 }
 
@@ -152,8 +197,8 @@ impl ServerCommand {
         Self::Var(VarCommand::with_slot(name, value, slot))
     }
 
-    pub fn error_reply() -> Self {
-        Self::ErrorReply(ErrorReplyCommand::new())
+    pub fn error_reply(name: &str, reason: ErrorReplyReason) -> Self {
+        Self::ErrorReply(ErrorReplyCommand::new(name, reason))
     }
 }
 

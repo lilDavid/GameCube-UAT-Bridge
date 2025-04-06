@@ -76,7 +76,7 @@ fn serve_uat_client(mut client: Client, server_messages: Receiver<Vec<ServerComm
             Err(TryRecvError::Disconnected) => break,
         }
 
-        let commands = match client.receive() {
+        let (commands, error_replies) = match client.receive() {
             Ok(commands) => commands,
             Err(MessageReadError::SocketError(WebSocketError::IoError(err))) if err.kind() == ErrorKind::WouldBlock => continue,
             Err(err) => match client.handle_error(err) {
@@ -87,16 +87,19 @@ fn serve_uat_client(mut client: Client, server_messages: Receiver<Vec<ServerComm
                 }
             }
         };
+        let mut response = vec![];
         for command in commands {
-            let response = match ClientCommand::from(command) {
+            match ClientCommand::from(command) {
                 ClientCommand::Sync(_) => variable_store.lock().unwrap()
                     .variable_values()
                     .map(|(name, value)| ServerCommand::var(name, value.clone()))
-                    .collect::<Vec<_>>(),
-                _ => todo!(),
+                    .for_each(|reply| response.push(reply)),
             };
-            client.send(&response)?
         }
+        for reply in error_replies {
+            response.push(ServerCommand::ErrorReply(reply));
+        }
+        client.send(&response)?
     }
     Ok(())
 }

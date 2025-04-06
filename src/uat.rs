@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Display, io, net::{SocketAddr, IpAddr, TcpListener, TcpStream}};
 
-use command::{ClientCommand, ServerCommand};
+use command::{ClientCommand, ErrorReplyCommand, ServerCommand};
 use json::JsonValue;
 use websocket::{server::{InvalidConnection, NoTlsAcceptor, WsServer}, sync::{server::upgrade::Buffer, Client as WsClient}, Message, OwnedMessage, WebSocketError, WebSocketResult};
 
@@ -61,7 +61,7 @@ impl Client {
         Message::text(json::stringify(message)).into()
     }
 
-    fn parse_message(message: OwnedMessage) -> Result<Vec<ClientCommand>, MessageReadError> {
+    fn parse_message(message: OwnedMessage) -> Result<(Vec<ClientCommand>, Vec<ErrorReplyCommand>), MessageReadError> {
         let data = match message {
             OwnedMessage::Text(text) => text,
             OwnedMessage::Binary(_) => Err(MessageReadError::InvalidMessage)?,
@@ -69,13 +69,16 @@ impl Client {
         };
         let frame = json::parse(&data).or_else(|_| Err(MessageReadError::InvalidMessage))?;
         if let JsonValue::Array(commands) = frame {
-            Ok(commands.into_iter().map(ClientCommand::from).collect::<Vec<_>>())
+            let (cmds, replies): (Vec<_>, Vec<_>) = commands.into_iter().map(ClientCommand::try_from).partition(Result::is_ok);
+            let cmds = cmds.into_iter().map(Result::unwrap).collect::<Vec<_>>();
+            let replies = replies.into_iter().map(Result::unwrap_err).collect::<Vec<_>>();
+            Ok((cmds, replies))
         } else {
             Err(MessageReadError::InvalidMessage)
         }
     }
 
-    pub fn receive(&mut self) -> Result<Vec<ClientCommand>, MessageReadError> {
+    pub fn receive(&mut self) -> Result<(Vec<ClientCommand>, Vec<ErrorReplyCommand>), MessageReadError> {
         Self::parse_message(self.0.recv_message()?)
     }
 
