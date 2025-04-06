@@ -228,6 +228,25 @@ pub struct LuaInterface {
 }
 
 impl LuaInterface {
+    fn read_data(
+        lua: &Lua,
+        connection: Option<&LuaGcnConnection>,
+        ty: Option<&str>,
+        f: impl Fn(&dyn GameCubeConnection) -> Result<Vec<u8>, io::Error>
+    ) -> mlua::Result<mlua::Value> {
+        let connection = connection.ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+        let bytes = match f(connection.gamecube_connection.deref()) {
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
+            Err(e) => Err(mlua::Error::from(e)),
+            Ok(bytes) => Ok(Some(bytes)),
+        }?;
+        let bytes = match bytes {
+            Some(bytes) => bytes,
+            None => return Ok(mlua::Value::Nil),
+        };
+        convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
+    }
+
     pub fn new() -> mlua::Result<Self> {
         let lua = Lua::new();
         let connection: Rc<RefCell<Option<LuaGcnConnection>>> = Rc::new(RefCell::new(None));
@@ -247,36 +266,22 @@ impl LuaInterface {
         gamecube.set("BaseAddress", GCN_BASE_ADDRESS)?;
         let connect = Rc::clone(&connection);
         gamecube.set("ReadAddress", lua.create_function(
-            move |lua, (_, address, size, ty): (mlua::Value, u32, u32, Option<String>)| {
-                let connection = connect.borrow();
-                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
-                let bytes = match connection.gamecube_connection.read_address(size, address) {
-                    Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
-                    Err(e) => Err(mlua::Error::from(e)),
-                    Ok(bytes) => Ok(Some(bytes)),
-                }?;
-                let bytes = match bytes {
-                    Some(bytes) => bytes,
-                    None => return Ok(mlua::Value::Nil),
-                };
-                convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
+            move |lua, (_, address, size, ty): (mlua::Value, u32, u32, Option<String>)|
+                Self::read_data(lua, connect.borrow().as_ref(), ty.as_deref(),
+                    |gcn| gcn.read_address(size, address))
+        )?)?;
+        let connect = Rc::clone(&connection);
+        gamecube.set("ReadPointer", lua.create_function(
+            move |lua, (_, address, size, offset, ty): (mlua::Value, u32, u32, i32, Option<String>)| {
+                Self::read_data(lua, connect.borrow().as_ref(), ty.as_deref(),
+                    |gcn| gcn.read_pointers(size, address, &[offset]))
             }
         )?)?;
         let connect = Rc::clone(&connection);
         gamecube.set("ReadPointerChain", lua.create_function(
             move |lua, (_, address, size, offsets, ty): (mlua::Value, u32, u32, Vec<i32>, Option<String>)| {
-                let connection = connect.borrow();
-                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
-                let bytes = match connection.gamecube_connection.read_pointers(size, address, &offsets) {
-                    Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
-                    Err(e) => Err(mlua::Error::from(e)),
-                    Ok(bytes) => Ok(Some(bytes)),
-                }?;
-                let bytes = match bytes {
-                    Some(bytes) => bytes,
-                    None => return Ok(mlua::Value::Nil),
-                };
-                convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
+                Self::read_data(lua, connect.borrow().as_ref(), ty.as_deref(),
+                    |gcn| gcn.read_pointers(size, address, &offsets))
             }
         )?)?;
         lua.globals().set("GameCube", gamecube)?;

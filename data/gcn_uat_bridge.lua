@@ -43,6 +43,12 @@ function GameCube:ReadAddress(address, size, type) end
 
 ---@param address integer
 ---@param size integer
+---@param offset integer
+---@param type Type?  # Default bytes
+function GameCube:ReadPointer(address, size, offset, type) end
+
+---@param address integer
+---@param size integer
 ---@param offsets integer[]
 ---@param type Type?  # Default bytes
 function GameCube:ReadPointerChain(address, size, offsets, type) end
