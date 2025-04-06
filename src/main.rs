@@ -13,13 +13,16 @@ use websocket::{WebSocketError, WebSocketResult};
 use crate::connection::dolphin::DolphinConnection;
 use crate::connection::nintendont::NintendontConnection;
 
+const CONNECTION_ATTEMPT_INTERVAL: Duration = Duration::from_secs(5);
+const GAME_WATCH_INTERVAL: Duration = Duration::from_millis(500);
+
 #[cfg(target_os = "windows")]
 fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
     let result = loop {
         println!("Connecting to Dolphin...");
         match DolphinConnection::new() {
             Ok(dolphin) => break Box::new(dolphin),
-            Err(err) => {eprintln!("{}", err); thread::sleep(Duration::from_secs(1))},
+            Err(err) => {eprintln!("{}", err); thread::sleep(CONNECTION_ATTEMPT_INTERVAL)},
         }
     };
     println!("Connected");
@@ -36,7 +39,7 @@ fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnection> {
     let result = loop {
         match NintendontConnection::new(address) {
             Ok(nintendont) => break Box::new(nintendont),
-            Err(err) => {eprintln!("{}", err); thread::sleep(Duration::from_secs(1))},
+            Err(err) => {eprintln!("{}", err); thread::sleep(CONNECTION_ATTEMPT_INTERVAL)},
         }
     };
     println!("Connected");
@@ -150,7 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
             Err(_) => {
                 println!("No interface found for this game");
-                thread::sleep(Duration::from_secs(1));
+                thread::sleep(CONNECTION_ATTEMPT_INTERVAL);
             }
         }
 
@@ -195,7 +198,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             });
 
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(GAME_WATCH_INTERVAL);
         }
 
         println!("Disconnected");
