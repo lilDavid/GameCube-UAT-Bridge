@@ -17,8 +17,8 @@ const GAME_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
 #[cfg(target_os = "windows")]
 fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
+    println!("Connecting to Dolphin...");
     let result = loop {
-        println!("Connecting to Dolphin...");
         match DolphinConnection::new() {
             Ok(dolphin) => break Box::new(dolphin),
             Err(err) => {eprintln!("{}", err); thread::sleep(CONNECTION_ATTEMPT_INTERVAL)},
