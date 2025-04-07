@@ -16,4 +16,5 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-game_data/**
+# Scripts are passed as arguments and can be stored anywhere, but this is a convenient location.
+data/scripts/**
