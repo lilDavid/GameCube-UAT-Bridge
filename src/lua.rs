@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, error::Error, fmt::Display, fs, i
 use json::JsonValue;
 use mlua::{FromLua, IntoLua, Lua, Table};
 
-use crate::connection::GameCubeConnection;
+use crate::{connection::GameCubeConnection, uat::command::InfoCommand};
 
 
 const GCN_BASE_ADDRESS: u32 = 0x80000000;
@@ -300,6 +300,10 @@ impl LuaInterface {
         Ok(())
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.connection.borrow().as_ref().and_then(|i| i.game_interface.as_ref()).is_some()
+    }
+
     pub fn connect(&self, connection: Box<dyn GameCubeConnection>) -> Result<(String, GameInterface), Box<dyn GameCubeConnection>> {
         self.disconnect();
 
@@ -332,36 +336,51 @@ impl LuaInterface {
         self.connection.borrow_mut().take();
     }
 
-    pub fn run_game_watcher(&self) -> Result<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>, GameWatcherError> {
+    pub fn verify_current_game(&self) -> Result<(), VerificationError> {
         let connection = self.connection.borrow();
         let interface = connection.as_ref()
-            .and_then(|connection| connection.game_interface.as_ref()).ok_or(GameWatcherError::NotConnected)?;
+            .and_then(|connection| connection.game_interface.as_ref()).ok_or(VerificationError::NotConnected)?;
 
         match interface.verify() {
             Ok(true) => Ok(()),
-            Ok(false) => Err(GameWatcherError::VerificationFailed),
-            Err(err) => Err(GameWatcherError::VerificationError(err)),
-        }?;
+            Ok(false) => Err(VerificationError::VerificationFailed),
+            Err(err) => Err(VerificationError::VerificationError(err)),
+        }
+    }
 
-        Ok(VariableStore::new(&self.lua)
+    pub fn get_info(&self) -> Option<InfoCommand> {
+        self.connection.borrow().as_ref()
+            .and_then(|c| c.game_interface.as_ref())
+            .map(|interface|
+                InfoCommand::new(
+                    interface.name().unwrap_or(None).as_deref(),
+                    interface.version().unwrap_or(None).as_deref()
+                )
+            )
+    }
+
+    pub fn run_game_watcher(&self) -> Option<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>> {
+        let connection = self.connection.borrow();
+        let interface = connection.as_ref().and_then(|c| c.game_interface.as_ref())?;
+        Some(VariableStore::new(&self.lua)
             .and_then(|(store, table)| interface.run_game_watcher(&table).map(|_| store))
             .map(VariableStore::unwrap))
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum GameWatcherError {
+pub enum VerificationError {
     NotConnected,
     VerificationFailed,
     VerificationError(mlua::Error),
 }
 
-impl Display for GameWatcherError {
+impl Display for VerificationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GameWatcherError::NotConnected => "no interface is active".fmt(f),
-            GameWatcherError::VerificationFailed => "active interface failed to verify current game".fmt(f),
-            GameWatcherError::VerificationError(err) => {
+            VerificationError::NotConnected => "no interface is active".fmt(f),
+            VerificationError::VerificationFailed => "active interface failed to verify current game".fmt(f),
+            VerificationError::VerificationError(err) => {
                 "active interface encountered an error while verifying current game: ".fmt(f)?;
                 err.fmt(f)
             }
@@ -369,4 +388,4 @@ impl Display for GameWatcherError {
     }
 }
 
-impl Error for GameWatcherError {}
+impl Error for VerificationError {}

@@ -1,8 +1,7 @@
-use std::{error::Error, fmt::Display, io, net::{SocketAddr, IpAddr, TcpListener, TcpStream}};
+use std::{io::{self, ErrorKind}, net::{IpAddr, SocketAddr, TcpListener, TcpStream}};
 
-use command::{ClientCommand, ErrorReplyCommand, ServerCommand};
-use json::JsonValue;
-use websocket::{server::{InvalidConnection, NoTlsAcceptor, WsServer}, sync::{server::upgrade::Buffer, Client as WsClient}, Message, OwnedMessage, WebSocketError, WebSocketResult};
+use command::{ClientCommand, ErrorReplyCommand, ErrorReplyReason, ServerCommand};
+use websocket::{server::{NoTlsAcceptor, WsServer}, sync::Client as WsClient, Message, OwnedMessage, WebSocketError, WebSocketResult};
 
 pub mod command;
 pub mod variable;
@@ -13,119 +12,84 @@ pub const UAT_PROTOCOL_VERSION: i32 = 0;
 
 pub struct Server(WsServer<NoTlsAcceptor, TcpListener>);
 
-pub struct Client(WsClient<TcpStream>);
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum IncomingConnectionError {
-    InvalidConnection(InvalidConnection<TcpStream, Buffer>),
-    CouldNotAccept(io::Error),
+pub struct Client{
+    client: WsClient<TcpStream>,
+    shut_down: bool,
 }
-
-impl Display for IncomingConnectionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidConnection(_) => "Invalid connection".fmt(f),
-            Self::CouldNotAccept(err) => { "Could not accept: ".fmt(f)?; err.fmt(f) }
-        }
-    }
-}
-
-impl Error for IncomingConnectionError {}
 
 impl Server {
     pub fn new(addr: impl Into<IpAddr>) -> Result<Self, io::Error> {
         let addr = addr.into();
-        Ok(Self(websocket::server::sync::Server::bind([
+        let addresses = [
             SocketAddr::new(addr, UAT_PORT_MAIN),
             SocketAddr::new(addr, UAT_PORT_BACKUP),
-        ].as_slice())?))
+        ];
+        let server = websocket::server::sync::Server::bind(addresses.as_slice())?;
+        Ok(Self(server))
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.0.local_addr()
     }
 
-    pub fn accept_clients(self) -> impl Iterator<Item = Result<Client, IncomingConnectionError>> {
-        self.0.into_iter().map(|connection| {
-            let connection = connection.or_else(|e| Err(IncomingConnectionError::InvalidConnection(e)))?;
-            let client = connection.accept().or_else(|e| Err(IncomingConnectionError::CouldNotAccept(e.1)))?;
-            client.stream_ref().set_nonblocking(true).map_err(|e| IncomingConnectionError::CouldNotAccept(e))?;
-            Ok(Client(client))
+    pub fn accept_clients(self) -> impl Iterator<Item = io::Result<Client>> {
+        self.0.into_iter().filter_map(Result::ok).map(|connection| {
+            let client = connection.accept().map_err(|(_, err)| err)?;
+            Client::new(client)
         })
     }
 }
 
 impl Client {
-    fn create_message(message: &[ServerCommand]) -> OwnedMessage {
-        Message::text(json::stringify(message)).into()
+    fn new(client: WsClient<TcpStream>) -> io::Result<Self> {
+        client.set_nonblocking(true)?;
+        Ok(Self { client, shut_down: false })
     }
 
-    fn parse_message(message: OwnedMessage) -> Result<(Vec<ClientCommand>, Vec<ErrorReplyCommand>), MessageReadError> {
-        let data = match message {
-            OwnedMessage::Text(text) => text,
-            OwnedMessage::Binary(_) => Err(MessageReadError::InvalidMessage)?,
-            msg => Err(MessageReadError::HandleMessagePacket(msg))?,
-        };
-        let frame = json::parse(&data).or_else(|_| Err(MessageReadError::InvalidMessage))?;
-        if let JsonValue::Array(commands) = frame {
-            let (cmds, replies): (Vec<_>, Vec<_>) = commands.into_iter().map(ClientCommand::try_from).partition(Result::is_ok);
-            let cmds = cmds.into_iter().map(Result::unwrap).collect::<Vec<_>>();
-            let replies = replies.into_iter().map(Result::unwrap_err).collect::<Vec<_>>();
-            Ok((cmds, replies))
-        } else {
-            Err(MessageReadError::InvalidMessage)
+    fn convert_websocket_error(err: WebSocketError) -> io::Error {
+        match err {
+            WebSocketError::ProtocolError(msg) => io::Error::new(ErrorKind::InvalidData, msg),
+            WebSocketError::DataFrameError(msg) => io::Error::new(ErrorKind::InvalidData, msg),
+            WebSocketError::NoDataAvailable => io::Error::new(ErrorKind::WouldBlock, "no data to receive"),
+            WebSocketError::IoError(err) => err,
+            WebSocketError::Utf8Error(err) => io::Error::new(ErrorKind::InvalidData, err),
+            WebSocketError::Other(err) => io::Error::new(ErrorKind::Other, err),
         }
     }
 
-    pub fn receive(&mut self) -> Result<(Vec<ClientCommand>, Vec<ErrorReplyCommand>), MessageReadError> {
-        Self::parse_message(self.0.recv_message()?)
+    pub fn receive(&mut self) -> io::Result<Vec<Result<ClientCommand, ErrorReplyCommand>>> {
+        let data = match self.client.recv_message() {
+            Ok(OwnedMessage::Text(text)) => text,
+            Ok(OwnedMessage::Ping(data)) => {
+                self.client.send_message(&Message::pong(data)).map_err(Self::convert_websocket_error)?;
+                return Ok(vec![]);
+            }
+            Ok(OwnedMessage::Pong(_)) => return Ok(vec![]),
+            Ok(OwnedMessage::Binary(_)) => Err(io::Error::new(ErrorKind::InvalidData, "expected text data, got binary"))?,
+            Ok(OwnedMessage::Close(_)) => Err(io::Error::new(ErrorKind::ConnectionAborted, "client closed connection"))?,
+            Err(err) => Err(Self::convert_websocket_error(err))?,
+        };
+        let json = match json::parse(&data) {
+            Ok(data) => data,
+            Err(err) => Err(io::Error::new(ErrorKind::InvalidData, err))?,
+        };
+        if !json.is_array() {
+            return Ok(vec![Err(ErrorReplyCommand::with_description("", ErrorReplyReason::BadValue, Some("expected array")))]);
+        }
+        Ok(json.members().map(ClientCommand::try_from).collect())
     }
 
     pub fn send(&mut self, message: &[ServerCommand]) -> WebSocketResult<()> {
-        self.0.send_message(&Self::create_message(message))
+        self.client.send_message(&Message::text(json::stringify(message)))
     }
 
-    pub fn handle_error(&mut self, error: MessageReadError) -> MessageResponse {
-        match error {
-            MessageReadError::SocketError(e) => MessageResponse::Stop(Some(e)),
-            MessageReadError::InvalidMessage => { self.0.send_message(&Message::close()).unwrap(); MessageResponse::Stop(None) }
-            MessageReadError::HandleMessagePacket(OwnedMessage::Ping(data)) => { self.0.send_message(&Message::pong(data)).unwrap(); MessageResponse::Continue }
-            MessageReadError::HandleMessagePacket(OwnedMessage::Pong(_)) => MessageResponse::Continue,
-            MessageReadError::HandleMessagePacket(OwnedMessage::Close(_)) => MessageResponse::Stop(None),
-            MessageReadError::HandleMessagePacket(OwnedMessage::Text(_)) => unreachable!(),
-            MessageReadError::HandleMessagePacket(OwnedMessage::Binary(_)) => unreachable!(),
-        }
+    pub fn shutdown(&mut self) -> io::Result<()> {
+        self.shut_down = true;
+        self.client.shutdown()
     }
 
-}
-
-#[derive(Debug)]
-pub enum MessageReadError {
-    InvalidMessage,
-    SocketError(WebSocketError),
-    HandleMessagePacket(OwnedMessage),
-}
-
-impl Display for MessageReadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidMessage => "Invalid message, need to close connection".fmt(f),
-            Self::SocketError(err) => err.fmt(f),
-            Self::HandleMessagePacket(_) => "Need to handle message packet".fmt(f),
-        }
+    pub fn connected(&self) -> bool {
+        return !self.shut_down;
     }
-}
 
-impl Error for MessageReadError {}
-
-impl From<WebSocketError> for MessageReadError {
-    fn from(value: WebSocketError) -> Self {
-        Self::SocketError(value)
-    }
-}
-
-pub enum MessageResponse {
-    Continue,
-    Stop(Option<WebSocketError>),
 }

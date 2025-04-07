@@ -2,12 +2,11 @@ mod connection;
 mod lua;
 mod uat;
 
-use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::{mpsc::{channel, Receiver, Sender, TryRecvError}, Arc, Mutex, RwLock}, thread::{self, JoinHandle}, time::Duration};
+use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::mpsc::{channel, TryRecvError}, thread::{self}, time::Duration};
 
 use connection::GameCubeConnection;
-use lua::{GameWatcherError, LuaInterface};
-use uat::{command::{ClientCommand, InfoCommand, ServerCommand}, variable::VariableStore, Client, MessageReadError, MessageResponse, Server};
-use websocket::{WebSocketError, WebSocketResult};
+use lua::{VerificationError, LuaInterface};
+use uat::{command::{ClientCommand, ServerCommand}, variable::VariableStore, Client, Server};
 
 #[cfg(target_os = "windows")]
 use crate::connection::dolphin::DolphinConnection;
@@ -46,64 +45,6 @@ fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnection> {
     result
 }
 
-fn run_uat_server(
-    uat_server: Server,
-    client_handles: Arc<Mutex<Vec<(Sender<Vec<ServerCommand>>, JoinHandle<WebSocketResult<()>>)>>>,
-    variable_store: &Arc<Mutex<VariableStore>>,
-    info_cache: &RwLock<Option<InfoCommand>>,
-) -> WebSocketResult<()> {
-    for mut client in uat_server.accept_clients().filter_map(Result::ok) {
-        let variable_store = Arc::clone(variable_store);
-        let (command_sender, command_receiver) = channel();
-        if let Some(info) = info_cache.read().unwrap().as_ref() {
-            client.send(&[ServerCommand::Info(info.clone())])?;
-        }
-
-        let handle = thread::spawn(move || {
-            serve_uat_client(client, command_receiver, &variable_store)
-        });
-        client_handles.lock().unwrap().push((command_sender, handle));
-    }
-
-    Ok(())
-}
-
-fn serve_uat_client(mut client: Client, server_messages: Receiver<Vec<ServerCommand>>, variable_store: &Mutex<VariableStore>) -> WebSocketResult<()> {
-    loop {
-        match server_messages.try_recv() {
-            Ok(server_commands) => client.send(&server_commands)?,
-            Err(TryRecvError::Empty) => (),
-            Err(TryRecvError::Disconnected) => break,
-        }
-
-        let (commands, error_replies) = match client.receive() {
-            Ok(commands) => commands,
-            Err(MessageReadError::SocketError(WebSocketError::IoError(err))) if err.kind() == ErrorKind::WouldBlock => continue,
-            Err(err) => match client.handle_error(err) {
-                MessageResponse::Continue => continue,
-                MessageResponse::Stop(err) => {
-                    if let Some(e) = err { eprintln!("{}", e); }
-                    break;
-                }
-            }
-        };
-        let mut response = vec![];
-        for command in commands {
-            match ClientCommand::from(command) {
-                ClientCommand::Sync(_) => variable_store.lock().unwrap()
-                    .variable_values()
-                    .map(|(name, value)| ServerCommand::var(name, value.clone()))
-                    .for_each(|reply| response.push(reply)),
-            };
-        }
-        for reply in error_replies {
-            response.push(ServerCommand::ErrorReply(reply));
-        }
-        client.send(&response)?
-    }
-    Ok(())
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let mut argv = env::args();
     argv.next();  // Consume argv[0]
@@ -126,84 +67,133 @@ fn main() -> Result<(), Box<dyn Error>> {
         lua_interface.run_script(arg)?;
     }
 
-    let info_cache: Arc<RwLock<Option<InfoCommand>>> = Arc::new(RwLock::new(None));
-    let variable_store = VariableStore::new();
-    let variable_store: Arc<Mutex<VariableStore>> = Arc::new(Mutex::new(variable_store));
-
     let uat_server = Server::new(Ipv4Addr::LOCALHOST)?;
-    let client_handles = Arc::new(Mutex::new(Vec::new()));
-    let info = Arc::clone(&info_cache);
-    let variables = Arc::clone(&variable_store);
-    let handles = Arc::clone(&client_handles);
+    let (client_sender, client_receiver) = channel();
     println!("Listening for UAT clients on port {}", uat_server.local_addr()?.port());
     thread::spawn(move || {
-        run_uat_server(uat_server, handles, &variables, &info)
+        for client in uat_server.accept_clients().filter_map(Result::ok) {
+            if let Err(_) = client_sender.send(client) {
+                break
+            };
+        }
+        println!("Server closed");
     });
 
+    let mut variable_store = VariableStore::new();
+    let mut clients: Vec<Client> = Vec::new();
     loop {
-        let connection = connection_factory();
-        match lua_interface.connect(connection) {
-            Ok((name, interface)) => {
-                println!("Found interface {} for {}", name, interface.name()?.unwrap_or_else(|| "<nil>".into()));
-                let mut info_cache = info_cache.write().unwrap();
-                let info_command = InfoCommand::new(interface.name()?.as_deref(), interface.version()?.as_deref());
-                info_cache.replace(info_command.clone());
-                let mut handles = client_handles.lock().unwrap();
-                handles.retain(|(_, thread)| !thread.is_finished());
-                for (channel, _) in handles.iter() {
-                    channel.send(vec![ServerCommand::Info(info_command.clone())]).ok();
-                }
-            },
-            Err(_) => {
-                println!("No interface found for this game");
-                thread::sleep(CONNECTION_ATTEMPT_INTERVAL);
+        match lua_interface.verify_current_game() {
+            Ok(_) => {}
+            Err(VerificationError::NotConnected) => {}
+            Err(VerificationError::VerificationFailed) => {
+                println!("Current interface failed to re-verify, disconnecting.");
+                lua_interface.disconnect();
+            }
+            Err(VerificationError::VerificationError(err)) => {
+                println!("{}", err);
+                println!("Current interface encountered an error while re-verifying, disconnecting.");
+                lua_interface.disconnect();
             }
         }
 
-        loop {
-            let result = match lua_interface.run_game_watcher() {
-                Ok(result) => result,
-                Err(GameWatcherError::NotConnected) => break,
-                Err(GameWatcherError::VerificationFailed) => {
-                    println!("Current interface failed to re-verify, disconnecting.");
-                    break
-                }
-                Err(GameWatcherError::VerificationError(err)) => {
-                    println!("{}", err);
-                    println!("Current interface encountered an error while re-verifying, disconnecting.");
-                    break
+        if !lua_interface.is_connected() {
+            let connection = connection_factory();
+            match lua_interface.connect(connection) {
+                Ok((name, interface)) => {
+                    println!(
+                        "Found interface {} for {}",
+                        name,
+                        interface.name()
+                            .unwrap_or_else(|_| Some("<invalid>".into()))
+                            .unwrap_or_else(|| "<nil>".into())
+                    );
+                },
+                Err(_) => {
+                    println!("No interface found for this game");
+                    thread::sleep(CONNECTION_ATTEMPT_INTERVAL);
+                    continue;
                 }
             };
-
-            match result {
-                Ok(updates) => Some(updates),
-                Err(e) => { eprintln!("{}", e); break }
-            }.map(|changes|
-                changes.into_iter()
-                .filter_map(|(k, res)| match res {
-                    Ok(v) => Some((k, v)),
-                    Err(e) => { eprintln!("{}", e); None },
-                })
-                .filter(|(name, value)| {
-                    let mut variables = variable_store.lock().unwrap();
-                    variables.update_variable(&name, value.clone())
-                })
-                .inspect(|(name, value)| {
-                    println!(":{} = {}", name, value)
-                })
-                .map(|(name, value)| ServerCommand::var(&name, value))
-                .collect::<Vec<_>>()
-            ).map(|changes| {
-                let mut handles = client_handles.lock().unwrap();
-                handles.retain(|(_, thread)| !thread.is_finished());
-                for (channel, _) in handles.iter() {
-                    channel.send(changes.clone()).ok();
-                }
-            });
-
-            thread::sleep(GAME_WATCH_INTERVAL);
         }
 
-        println!("Disconnected");
+        let changes = match lua_interface.run_game_watcher() {
+            Some(Ok(updates)) => updates,
+            Some(Err(e)) => {
+                eprintln!("{}", e);
+                println!("Disconnected");
+                continue
+            }
+            None => {
+                println!("Disconnected");
+                continue
+            }
+        }.into_iter()
+            .filter_map(|(k, res)| match res {
+                Ok(v) => Some((k, v)),
+                Err(e) => { eprintln!("{}", e); None },
+            })
+            .filter(|(name, value)| variable_store.update_variable(&name, value.clone()))
+            .inspect(|(name, value)| println!(":{} = {}", name, value))
+            .map(|(name, value)| ServerCommand::var(&name, value))
+            .collect::<Vec<_>>();
+
+        // FIXME: Operations are entirely skipped if they block, which could be a problem for Sync responses.
+        // Unsure how to fix without more threads.
+        let mut cache_variables: Option<Vec<ServerCommand>> = None;
+        for client in &mut clients {
+            let mut replies = Vec::new();
+            let mut sent_variables = false;
+            match client.receive() {
+                Ok(messages) => {
+                    for message in messages {
+                        match message {
+                            Ok(ClientCommand::Sync(_)) => if !sent_variables {
+                                replies.extend_from_slice(cache_variables.get_or_insert_with(||
+                                    variable_store.variable_values()
+                                    .map(|(name, value)| ServerCommand::var(name, value.clone()))
+                                    .collect()
+                                ));
+                                sent_variables = true;
+                            },
+                            Err(error_reply) => replies.push(ServerCommand::ErrorReply(error_reply)),
+                        }
+                    }
+                }
+                Err(err) => {
+                    if err.kind() != ErrorKind::WouldBlock {
+                        eprintln!("{}", err);
+                        client.shutdown().ok();
+                    }
+                }
+            };
+            if !sent_variables {
+                replies.extend_from_slice(&changes);
+            }
+            if client.connected() && !replies.is_empty() {
+                client.send(&replies).unwrap_or_else(|err| eprintln!("{}", err));
+            }
+        }
+
+        let mut cache_info = None;
+        while let Some(mut new_client) = match client_receiver.try_recv() {
+            Ok(client) => Some(client),
+            Err(TryRecvError::Empty) => None,
+            Err(dc) => Err(dc)?,
+        } {
+            if cache_info.is_none() {
+                cache_info = lua_interface.get_info().map(ServerCommand::Info);
+            }
+            if let Some(info) = &cache_info {
+                new_client.send(&[info.clone()]).or_else(|_| new_client.shutdown()).ok();
+            } else {
+                break;
+            }
+
+            clients.push(new_client);
+        }
+
+        clients.retain(Client::connected);
+
+        thread::sleep(GAME_WATCH_INTERVAL);
     }
 }

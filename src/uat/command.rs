@@ -27,18 +27,18 @@ pub enum ClientCommand {
     Sync(SyncCommand),
 }
 
-impl TryFrom<JsonValue> for ClientCommand {
+impl TryFrom<&JsonValue> for ClientCommand {
     type Error = ErrorReplyCommand;
 
-    fn try_from(value: JsonValue) -> Result<Self, Self::Error> {
+    fn try_from(value: &JsonValue) -> Result<Self, Self::Error> {
         if let JsonValue::Object(obj) = value {
             match obj["cmd"].as_str() {
                 Some("Sync") => Ok(Self::Sync(SyncCommand::with_slot(obj["slot"].as_str().map(String::from)))),
                 Some(s) => Err(ErrorReplyCommand::new(s, ErrorReplyReason::UnknownCmd)),
-                None => Err(ErrorReplyCommand::new("", ErrorReplyReason::BadValue)),
+                None => Err(ErrorReplyCommand::with_description("", ErrorReplyReason::MissingArgument, Some("missing cmd"))),
             }
         } else {
-            Err(ErrorReplyCommand::new("", ErrorReplyReason::BadValue))
+            Err(ErrorReplyCommand::with_description("", ErrorReplyReason::BadValue, Some("expected object")))
         }
     }
 }
@@ -150,6 +150,10 @@ pub struct ErrorReplyCommand {
 impl ErrorReplyCommand {
     pub fn new(name: &str, reason: ErrorReplyReason) -> Self {
         Self::with_argument_and_description(name, None, reason, None)
+    }
+
+    pub fn with_description(name: &str, reason: ErrorReplyReason, description: Option<&str>) -> Self {
+        Self::with_argument_and_description(name, None, reason, description)
     }
 
     pub fn with_argument_and_description(name: &str, argument: Option<&str>, reason: ErrorReplyReason, description: Option<&str>) -> Self {

@@ -2,25 +2,6 @@ use std::{borrow::Borrow, collections::HashMap, error::Error, fmt::Display};
 
 use json::JsonValue;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Variable {
-    U32(u32),
-}
-
-impl Into<JsonValue> for Variable {
-    fn into(self) -> JsonValue {
-        (&self).into()
-    }
-}
-
-impl Into<JsonValue> for &Variable {
-    fn into(self) -> JsonValue {
-        match self {
-            Variable::U32(i) => (*i).into()
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct VariableStore(HashMap<String, JsonValue>);
 
