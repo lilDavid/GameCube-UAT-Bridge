@@ -1,14 +1,17 @@
 ---@meta
 
 
----@alias Type
----| '"integer"'  # Unsigned integer
----| '"unsigned"'  # Unsigned integer
----| '"signed"'  # Signed integer
----| '"float"'  # Floating point number
----| '"string"'  # Byte sequence
----| '"bytes"'  # Byte sequence
----| nil  # Byte sequence
+---@alias TypeSpecifier
+---| '"u8"'  # Unsigned byte
+---| '"s8"'  # Signed byte
+---| '"u16"'  # Unsigned short
+---| '"s16"'  # Signed short
+---| '"u32"'  # Unsigned int
+---| '"s32"'  # Signed int
+---| '"s64"'  # Signed long. Unsigned is not supported.
+---| '"f32"'  # Single precision float
+---| '"f64"'  # Double precision float
+---| integer  # Number of bytes. Nonpositive numbers will return nil.
 
 ---@alias AnyValue
 ---| boolean
@@ -37,26 +40,18 @@ GameCube = {}
 ---@type integer
 GameCube.BaseAddress = nil
 
----Read a value from an address in memory
+---Read a single value from an address in memory. Prefer to read multiple values at once with GameCube:ReadBatch() if
+---you can, as each call of either method can be slow.
 ---@param address integer
----@param size integer
----@param type Type?  # Default bytes
+---@param type TypeSpecifier
+---@param offset integer|nil  # If not nil, dereference the address using this offset
 ---@return integer|number|string|nil
-function GameCube:ReadAddress(address, size, type) end
+function GameCube:ReadSingle(address, type, offset) end
 
----Follow a pointer at an address, and read the value offset from the result
----@param address integer
----@param size integer
----@param offset integer
----@param type Type?  # Default bytes
-function GameCube:ReadPointer(address, size, offset, type) end
-
----Follow a chain of pointers to pointers and read the final result
----@param address integer
----@param size integer
----@param offsets integer[]
----@param type Type?  # Default bytes
-function GameCube:ReadPointerChain(address, size, offsets, type) end
+---Read a batch of values from memory. Prefer to use this method if you can, as each call of either method can be slow.
+---@param read_list [integer, TypeSpecifier, integer|nil][]  # Address, type, and offset of value
+---@return (integer|number|string|nil)[]
+function GameCube:Read(read_list) end
 
 
 ---@class VariableStore

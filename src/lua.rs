@@ -1,9 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, error::Error, fmt::Display, fs, io, ops::Deref, path::Path, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, error::Error, fmt::Display, fs, io, mem, ops::Deref, path::Path, rc::Rc};
 
 use json::JsonValue;
-use mlua::{FromLua, IntoLua, Lua, Table};
+use mlua::{FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, Lua, Table};
 
-use crate::{connection::GameCubeConnection, uat::command::InfoCommand};
+use crate::{connection::{GameCubeConnection, Read}, uat::command::InfoCommand};
 
 
 const GCN_BASE_ADDRESS: u32 = 0x80000000;
@@ -86,37 +86,100 @@ fn convert_lua_to_json(lua: &Lua, value: &mlua::Value) -> mlua::Result<JsonValue
     }
 }
 
-fn convert_bytes(lua: &Lua, mut bytes: Vec<u8>, ty: &str) -> mlua::Result<mlua::Value> {
+macro_rules! bytes_to_lua {
+    ($type_name:ty, $bytes:ident, $lua:ident) => {{
+        assert_eq!($bytes.len(), mem::size_of::<$type_name>());
+        match $bytes.try_into().map(<$type_name>::from_be_bytes) {
+            Ok(i) => i.into_lua($lua),
+            Err(_) => Ok(mlua::Value::Nil),
+        }
+    }}
+}
+
+fn convert_bytes(lua: &Lua, bytes: Option<Vec<u8>>, ty: &TypeSpecifier) -> mlua::Result<mlua::Value> {
+    let bytes = match bytes {
+        Some(bytes) => bytes,
+        None => return Ok(mlua::Value::Nil),
+    };
     match ty {
-        "integer" | "unsigned" => {
-            bytes.reverse();
-            bytes.extend((bytes.len()..size_of::<mlua::Integer>()).map(|_| 0));
-            match bytes[..8].try_into().map(mlua::Integer::from_le_bytes) {  // Result is big endian but the bytes are reversed
-                Ok(i) => i.into_lua(lua),
-                Err(_) => Ok(mlua::Value::Nil),
-            }
-        },
-        "signed" => {
-            bytes.reverse();
-            if let Some(msb) = bytes.last().copied() {
-                let extension = if (msb as i8) < 0 { u8::MAX } else { 0 };
-                bytes.extend((bytes.len()..size_of::<mlua::Integer>()).map(|_| extension));
-                match bytes[..8].try_into().map(mlua::Integer::from_le_bytes) {
-                    Ok(i) => i.into_lua(lua),
-                    Err(_) => Ok(mlua::Value::Nil),
-                }
-            } else {
-                0.into_lua(lua)
-            }
-        },
-        "float" => {
-            match bytes.try_into().map(mlua::Number::from_be_bytes) {
-                Ok(f) => f.into_lua(lua),
-                Err(_) => Ok(mlua::Value::Nil),
-            }
-        },
-        _ => mlua::String::wrap(bytes).into_lua(lua),
+        TypeSpecifier::U8 => bytes_to_lua!(u8, bytes, lua),
+        TypeSpecifier::S8 => bytes_to_lua!(i8, bytes, lua),
+        TypeSpecifier::U16 => bytes_to_lua!(u16, bytes, lua),
+        TypeSpecifier::S16 => bytes_to_lua!(i16, bytes, lua),
+        TypeSpecifier::U32 => bytes_to_lua!(u32, bytes, lua),
+        TypeSpecifier::S32 => bytes_to_lua!(i32, bytes, lua),
+        TypeSpecifier::F32 => bytes_to_lua!(f32, bytes, lua),
+        TypeSpecifier::S64 => bytes_to_lua!(i64, bytes, lua),
+        TypeSpecifier::F64 => bytes_to_lua!(f64, bytes, lua),
+        TypeSpecifier::Bytes(size) => {
+            assert_eq!(bytes.len(), *size as usize);
+            mlua::String::wrap(bytes).into_lua(lua)
+        }
     }
+}
+
+#[derive(Debug, Clone)]
+enum TypeSpecifier {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+    S32,
+    F32,
+    S64,
+    F64,
+    Bytes(u8),
+}
+
+impl TypeSpecifier {
+    fn size(&self) -> u8 {
+        let size = match self {
+            Self::U8 | Self::S8 => mem::size_of::<u8>(),
+            Self::U16 | Self::S16 => mem::size_of::<u16>(),
+            Self::U32 | Self::S32 | Self::F32 => mem::size_of::<u32>(),
+            Self::S64 | Self::F64 => mem::size_of::<u64>(),
+            Self::Bytes(size) => *size as usize,
+        };
+        size as u8
+    }
+}
+
+impl FromLua for TypeSpecifier {
+    fn from_lua(value: mlua::Value, _: &Lua) -> mlua::Result<Self> {
+        match value {
+            mlua::Value::String(string) => {
+                string.to_str().and_then(|string| match string.deref() {
+                    "u8" => Ok(Self::U8),
+                    "s8" | "i8" => Ok(Self::S8),
+                    "u16" => Ok(Self::U16),
+                    "s16" | "i16" => Ok(Self::S16),
+                    "u32" => Ok(Self::U32),
+                    "s32" | "i32" => Ok(Self::S32),
+                    "f32" => Ok(Self::F32),
+                    "s64" | "i64" => Ok(Self::S64),
+                    "f64" => Ok(Self::F64),
+                    _ => Err(mlua::Error::FromLuaConversionError { from: "string", to: "TypeSpecifier".into(), message: None })
+                })
+            }
+            mlua::Value::Integer(size) => TryInto::<u8>::try_into(size)
+                .map_err(|err| mlua::Error::FromLuaConversionError { from: "integer", to: "u8".into(), message: Some(err.to_string()) })
+                .map(Self::Bytes),
+            value => Err(mlua::Error::FromLuaConversionError { from: value.type_name(), to: "TypeSpecifier".into(), message: None }),
+        }
+    }
+}
+
+fn read_tuple_from_table(table: mlua::Table, lua: &Lua) -> mlua::Result<(u32, TypeSpecifier, Option<i16>)> {
+    FromLuaMulti::from_lua_multi(
+        {
+            let address: mlua::Value = table.get(1)?;
+            let type_specifier: mlua::Value = table.get(2)?;
+            let offset: mlua::Value = table.get(3)?;
+            (address, type_specifier, offset)
+        }.into_lua_multi(lua)?,
+        lua
+    )
 }
 
 #[derive(Clone)]
@@ -228,25 +291,6 @@ pub struct LuaInterface {
 }
 
 impl LuaInterface {
-    fn read_data(
-        lua: &Lua,
-        connection: Option<&LuaGcnConnection>,
-        ty: Option<&str>,
-        f: impl Fn(&dyn GameCubeConnection) -> Result<Vec<u8>, io::Error>
-    ) -> mlua::Result<mlua::Value> {
-        let connection = connection.ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
-        let bytes = match f(connection.gamecube_connection.deref()) {
-            Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(None),
-            Err(e) => Err(mlua::Error::from(e)),
-            Ok(bytes) => Ok(Some(bytes)),
-        }?;
-        let bytes = match bytes {
-            Some(bytes) => bytes,
-            None => return Ok(mlua::Value::Nil),
-        };
-        convert_bytes(lua, bytes, ty.as_deref().unwrap_or("bytes"))
-    }
-
     pub fn new() -> mlua::Result<Self> {
         let lua = Lua::new();
         let connection: Rc<RefCell<Option<LuaGcnConnection>>> = Rc::new(RefCell::new(None));
@@ -265,23 +309,35 @@ impl LuaInterface {
         let gamecube = lua.create_table()?;
         gamecube.set("BaseAddress", GCN_BASE_ADDRESS)?;
         let connect = Rc::clone(&connection);
-        gamecube.set("ReadAddress", lua.create_function(
-            move |lua, (_, address, size, ty): (mlua::Value, u32, u32, Option<String>)|
-                Self::read_data(lua, connect.borrow().as_ref(), ty.as_deref(),
-                    |gcn| gcn.read_address(size, address))
-        )?)?;
-        let connect = Rc::clone(&connection);
-        gamecube.set("ReadPointer", lua.create_function(
-            move |lua, (_, address, size, offset, ty): (mlua::Value, u32, u32, i32, Option<String>)| {
-                Self::read_data(lua, connect.borrow().as_ref(), ty.as_deref(),
-                    |gcn| gcn.read_pointers(size, address, &[offset]))
+        gamecube.set("ReadSingle", lua.create_function(
+            move |lua, (_, address, type_specifier, offset): (mlua::Value, u32, TypeSpecifier, Option<i16>)| {
+                let connection = connect.borrow();
+                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                let read = Read::from_parts(address, type_specifier.size(), offset);
+                let bytes = connection.gamecube_connection.read_single(read)?;
+                let result = convert_bytes(lua, bytes, &type_specifier);
+                Ok(result)
             }
         )?)?;
         let connect = Rc::clone(&connection);
-        gamecube.set("ReadPointerChain", lua.create_function(
-            move |lua, (_, address, size, offsets, ty): (mlua::Value, u32, u32, Vec<i32>, Option<String>)| {
-                Self::read_data(lua, connect.borrow().as_ref(), ty.as_deref(),
-                    |gcn| gcn.read_pointers(size, address, &offsets))
+        gamecube.set("Read", lua.create_function(
+            move |lua, (_, read_list): (mlua::Value, Vec<Table>)| {
+                let connection = connect.borrow();
+                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                let read_list = read_list.into_iter().map(|table| read_tuple_from_table(table, lua)).collect::<mlua::Result<Vec<_>>>()?;
+                let (read_list, type_specifiers) = {
+                    let mut reads = Vec::with_capacity(read_list.len());
+                    let mut types = Vec::with_capacity(read_list.len());
+                    for (addr, ty, offset) in read_list {
+                        reads.push(Read::from_parts(addr, ty.size(), offset));
+                        types.push(ty);
+                    }
+                    (reads, types)
+                };
+                let byte_arrays = connection.gamecube_connection.read(&read_list)?;
+                Iterator::zip(byte_arrays.into_iter(), type_specifiers.into_iter()).map(|(bytes, type_specifier)| {
+                    convert_bytes(lua, bytes, &type_specifier)
+                }).collect::<mlua::Result<Vec<mlua::Value>>>()
             }
         )?)?;
         lua.globals().set("GameCube", gamecube)?;

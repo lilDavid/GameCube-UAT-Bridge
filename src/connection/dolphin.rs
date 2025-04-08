@@ -5,6 +5,8 @@ use dolphin_memory::Dolphin;
 
 use crate::connection::GameCubeConnection;
 
+use super::Read;
+
 #[cfg(target_os = "windows")]
 pub struct DolphinConnection {
     dolphin: Dolphin
@@ -29,28 +31,34 @@ impl DolphinConnection {
 
 #[cfg(target_os = "windows")]
 impl GameCubeConnection for DolphinConnection {
-    fn read_address(&self, size: u32, address: u32) -> Result<Vec<u8>, io::Error> {
-        self.read_pointers(size, address, &[])
-    }
+    fn read(&self, read_list: &[Read]) -> io::Result<Vec<Option<Vec<u8>>>> {
+        read_list.iter().map(|read| {
+            let (&address, &size, offsets) = match read {
+                Read::Direct { address, size } => (address, size, None),
+                Read::Indirect { address, offset, size } => (address, size, Some([*offset as usize])),
+            };
 
-    fn read_pointers(&self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
-        // For some reason, passing an empty Vec instead of None causes read() to always return a null address error
-        let offsets = if offsets.len() == 0 {
-            None
-        } else {
-            Some(offsets.iter().copied().map(|i| i as isize as usize).collect::<Vec<usize>>())
-        };
-        Ok(self.dolphin.read(size as usize, address as usize, offsets.as_ref().map(Vec::as_slice))?)
+            match self.dolphin.read(
+                size as usize,
+                address as usize,
+                offsets.as_ref().map(AsRef::as_ref)
+            ) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(err)
+                    if err.kind() == io::ErrorKind::InvalidData
+                        && err.get_ref()
+                            .map(|err| err.to_string() == "null pointer address")
+                            .unwrap_or(false)
+                    => Ok(None),
+                Err(err) => Err(err),
+            }
+        }).collect::<io::Result<Vec<_>>>()
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 impl GameCubeConnection for DolphinConnection {
-    fn read_address(&self, _: u32, _: u32) -> Result<Vec<u8>, io::Error> {
-        unreachable!()
-    }
-
-    fn read_pointers(&self, _: u32, _: u32, _: &[i32]) -> Result<Vec<u8>, io::Error> {
+    fn read(&self, _: &[Read]) -> io::Result<Vec<Option<Vec<u8>>>> {
         unreachable!()
     }
 }

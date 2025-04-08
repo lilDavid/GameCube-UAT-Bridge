@@ -11,13 +11,19 @@ This program uses Lua scripts to connect to the game and send variables to PopTr
 follows:
 
 ```lua
+local LEVEL_MAPPING = {
+    [972217896] = "Tallon Overworld",
+    [2214002543] = "Chozo Ruins",
+    -- And so on
+}
+
 ITEM_ID_MAPPING = {
-    ["Ice Beam"] = 1,
-    ["Wave Beam"] = 2,
-    ["Plasma Beam"] = 3,
-    ["Missile"] = 4,
-    ["Scan Visor"] = 5,
-    ["Morph Ball Bomb"] = 6,
+    [1] = "Ice Beam",
+    [2] = "Wave Beam",
+    [3] = "Plasma Beam",
+    [4] = "Missile",
+    [5] = "Scan Visor",
+    [6] = "Morph Ball Bomb",
     -- And so on
 }
 
@@ -27,23 +33,42 @@ metroid_prime_interface.Name = "Metroid Prime"
 metroid_prime_interface.Version = "0-00"
 
 metroid_prime_interface.VerifyFunc = function(self)
-    local game_id = GameCube:ReadAddress(GameCube.BaseAddress, 6, "string")
-    local revision = GameCube:ReadAddress(GameCube.BaseAddress + 6, 1, "integer")
+    local game_id, revision = table.unpack(GameCube:Read({
+        {GameCube.BaseAddress, 6}, -- Pass a number to get a string of that length
+        {GameCube.BaseAddress + 6, "u8"} -- Name a type to get that type back
+    }))
     return game_id == "GM8E01" and revision == 0
 end
 
 metroid_prime_interface.GameWatcher = function(self, store)
-    local player_state_address = GameCube:ReadPointer(0x8045AA60, 4, 0, "integer")
+    local player_state_address, world_id = table.unpack(GameCube:Read({
+        -- Optional 3rd parameter is an offset to dereference a pointer at the given address
+        {0x8045AA60, "u32", 0}, -- Read the value at 0x8045AA60, and get an int from the result
+        {0x805A8C40, "u32", 0x84}, -- Read the value at 0x805A8C40, add 0x84, and get an int from the result
+    }))
+
     if player_state_address then
         local inventory_table_address = player_state_address + 40
+        -- Try to read as many values as you can at the same time because GameCube:Read() and GameCube:ReadSingle() are slow
+        local inventory_table_address = player_state_address + 40
+        local read_list = {}
+        local variables = {}
         for name, id in pairs(ITEM_ID_MAPPING) do
-            local result = GameCube:ReadAddress(inventory_table_address + 8 * id + 4, 4, "integer")
-            store:WriteVariable("inventory/" .. name, result)
+            table.insert(read_list, {inventory_table_address + 8 * id + 4, "u32"})
+            table.insert(variables, name)
+        end
+        local result = GameCube:Read(read_list)
+        for i, var in ipairs(variables) do
+            store:WriteVariable("inventory/" .. var, result[i])
         end
     end
+
+    local world = LEVEL_MAPPING[world_id]
+    store:WriteVariable("Current Area", world)
 end
 
-ScriptHost:AddGameInterface("MetroidPrimeAP", metroid_prime_interface)
+-- The interface name can be whatever you want, but it helps to be descriptive
+ScriptHost:AddGameInterface("MetroidPrime-YourName", metroid_prime_interface)
 ```
 
 To run the server, start the program on the command line, pass in your Wii's IP address or "dolphin" on the command
@@ -65,7 +90,4 @@ line, and then pass paths to any connector scripts you want it to try:
 
 - Eventually make this into a GUI app that minimizes into the system tray so that you may choose the connection type
 and load scripts dynamically.
-- Extend or change the Lua API to work with groups of simultaneous reads rather than pointer dereferences because
-sequential reads from Nintendont are *expensive*
-- Possibly change to an async API on the Rust, Lua, or both sides to better handle potentially blocking operations (And
-manage Nintendont latency. Seriously, the scripts I've written to test this take north of a second to read their data.)
+- Possibly change to an async API on the Rust, Lua, or both sides to better handle potentially blocking operations

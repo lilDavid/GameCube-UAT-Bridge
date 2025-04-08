@@ -4,20 +4,34 @@ pub mod nintendont;
 use std::io;
 
 
-pub trait GameCubeConnection {
-    fn read_address(&self, size: u32, address: u32) -> Result<Vec<u8>, io::Error>;
+#[derive(Clone, Debug)]
+pub enum Read {
+    Direct { address: u32, size: u8 },
+    Indirect { address: u32, offset: i16, size: u8 }
+}
 
-    fn read_pointers(&self, size: u32, address: u32, offsets: &[i32]) -> Result<Vec<u8>, io::Error> {
-        // Empty => read <size> bytes at <address>
-        // 1 item => result <- read 4 bytes at <address>; read <size> bytes at <result> + <offset>
-
-        let mut address = address;
-        let mut offsets = offsets.into_iter().copied();
-        while let Some(offset) = offsets.next() {
-            let result = self.read_address(4, address)?;
-            address = u32::from_be_bytes([result[0], result[1], result[2], result[3]]) + offset as u32;
-        }
-
-        self.read_address(size, address)
+impl Read {
+    pub fn address(address: u32, size: u8) -> Self {
+        Self::Direct { address, size }
     }
+
+    pub fn pointer(address: u32, offset: i16, size: u8) -> Self {
+        Self::Indirect { address, offset, size }
+    }
+
+    pub fn from_parts(address: u32, size: u8, offset: Option<i16>) -> Self {
+        match offset {
+            None => Read::address(address, size),
+            Some(offset) => Read::pointer(address, offset, size),
+        }
+    }
+}
+
+pub trait GameCubeConnection {
+    fn read_single(&self, read: Read) -> io::Result<Option<Vec<u8>>> {
+        self.read(&[read])
+            .map(|slices| slices.into_iter().next().unwrap())
+    }
+
+    fn read(&self, read_list: &[Read]) -> io::Result<Vec<Option<Vec<u8>>>>;
 }
