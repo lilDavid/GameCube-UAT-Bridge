@@ -34,8 +34,8 @@ metroid_prime_interface.Version = "0-00"
 
 metroid_prime_interface.VerifyFunc = function(self)
     local game_id, revision = table.unpack(GameCube:Read({
-        {GameCube.BaseAddress, 6}, -- Pass a number to get a string of that length
-        {GameCube.BaseAddress + 6, "u8"} -- Name a type to get that type back
+        {GameCube.GameIDAddress, 6}, -- Pass a number to get a string of that length
+        {GameCube.GameIDAddress + 7, "u8"} -- Name a type to get that type back
     }))
     return game_id == "GM8E01" and revision == 0
 end

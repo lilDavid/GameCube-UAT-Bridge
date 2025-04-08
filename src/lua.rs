@@ -307,7 +307,7 @@ impl LuaInterface {
         lua.globals().set("ScriptHost", script_host)?;
 
         let gamecube = lua.create_table()?;
-        gamecube.set("BaseAddress", GCN_BASE_ADDRESS)?;
+        gamecube.set("GameIDAddress", GCN_BASE_ADDRESS)?;
         let connect = Rc::clone(&connection);
         gamecube.set("ReadSingle", lua.create_function(
             move |lua, (_, address, type_specifier, offset): (mlua::Value, u32, TypeSpecifier, Option<i16>)| {

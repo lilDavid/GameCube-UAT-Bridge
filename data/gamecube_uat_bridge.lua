@@ -38,7 +38,7 @@ function ScriptHost:AddGameInterface(name, interface) end
 GameCube = {}
 
 ---@type integer
-GameCube.BaseAddress = nil
+GameCube.GameIDAddress = nil
 
 ---Read a single value from an address in memory. Prefer to read multiple values at once with GameCube:ReadBatch() if
 ---you can, as each call of either method can be slow.
