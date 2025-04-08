@@ -50,7 +50,6 @@ metroid_prime_interface.GameWatcher = function(self, store)
     if player_state_address then
         local inventory_table_address = player_state_address + 40
         -- Try to read as many values as you can at the same time because GameCube:Read() and GameCube:ReadSingle() are slow
-        local inventory_table_address = player_state_address + 40
         local read_list = {}
         local variables = {}
         for name, id in pairs(ITEM_ID_MAPPING) do
