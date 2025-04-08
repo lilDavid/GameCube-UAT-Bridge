@@ -1,0 +1,37 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: 'ubuntu-latest'
+            name: 'Linux'
+          - os: 'macos-latest'
+            name: 'macOS ARM'
+          - os: 'macos-13'
+            name: 'macOS x86-64'
+          - os: 'windows-latest'
+            name: 'Windows'
+
+    runs-on: ${{ matrix.os }}
+
+    name: ${{ matrix.name }}
+
+    steps:
+      - name: Checkout repository
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build
+        run: cargo build --release --verbose
+# TODO: Uncomment if/when tests are written
+#     - name: Run tests
+#       run: cargo test --verbose
