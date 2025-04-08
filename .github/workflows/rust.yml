@@ -49,5 +49,5 @@ jobs:
         uses: actions/upload-artifact@v4
         if: matrix.os == 'windows-latest'
         with:
-          name: gamecube-uat-bridge-${{ matrix.version }}.exe
+          name: gamecube-uat-bridge-${{ matrix.version }}
           path: target/release/gamecube_uat_bridge.exe
