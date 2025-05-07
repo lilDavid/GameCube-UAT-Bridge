@@ -71,15 +71,17 @@ ScriptHost:AddGameInterface("MetroidPrime-YourName", metroid_prime_interface)
 ```
 
 To run the server, start the program on the command line, pass in your Wii's IP address or "dolphin" on the command
-line, and then pass paths to any connector scripts you want it to try:
+line, and then pass paths to any search paths connector scripts you want it to try:
 
 ```sh
 ./gamecube_uat_bridge '192.168.1.131' metroid_prime_connector.lua wind_waker_connector.lua
 ```
 
 ```ps1
-.\gamecube_uat_bridge.exe dolphin metroid_prime_connector.lua
+.\gamecube_uat_bridge.exe dolphin metroid_prime_connector.lua other_path/gamecube_bridge_scripts
 ```
+
+It will also search paths in the `GAMECUBE_UAT_BRIDGE_PATH` environment variable, formatted the same as your `PATH`.
 
 ## Building
 

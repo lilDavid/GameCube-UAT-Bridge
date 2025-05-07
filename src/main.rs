@@ -2,7 +2,7 @@ mod connection;
 mod lua;
 mod uat;
 
-use std::{env, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, str::FromStr, sync::mpsc::{channel, TryRecvError}, thread::{self}, time::Duration};
+use std::{env::{self, VarError}, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, path::PathBuf, str::FromStr, sync::mpsc::{channel, TryRecvError}, thread::{self}, time::Duration};
 
 use connection::GameCubeConnection;
 use lua::{VerificationError, LuaInterface};
@@ -78,9 +78,48 @@ fn main() -> Result<(), Box<dyn Error>> {
         Box::new(move || connect_to_nintendont(address))
     };
 
+    let mut search_paths = argv.map(PathBuf::from).collect::<Vec<_>>();
+    let key = "GAMECUBE_UAT_BRIDGE_PATH";
+    match env::var(key) {
+        Ok(value) => {
+            search_paths.extend(env::split_paths(&value));
+        },
+        Err(err) => if let VarError::NotPresent = err {} else {
+            eprintln!("Couldn't interpret {key}: {err}");
+        },
+    }
+
     let lua_interface = LuaInterface::new()?;
-    for arg in argv {
-        lua_interface.run_script(arg)?;
+    for search_path in search_paths {
+        if search_path.is_file() {
+            if let Err(err) = lua_interface.run_script(&search_path) {
+                let path = search_path.to_string_lossy();
+                eprintln!("{path}: {err}")
+            }
+        } else if search_path.is_dir() {
+            let dir_entries = match search_path.read_dir() {
+                Ok(d) => d,
+                Err(err) => { eprintln!("{err}"); continue }
+            };
+            for entry in dir_entries {
+                let file = match entry {
+                    Ok(f) => f,
+                    Err(err) => { eprintln!("{err}"); break }
+                };
+                match file.file_type() {
+                    Ok(t) => if !t.is_file() { continue; }
+                    Err(_) => continue,
+                }
+                if !file.file_name().to_string_lossy().ends_with(".lua") {
+                    continue;
+                }
+                let path = file.path();
+                if let Err(err) = lua_interface.run_script(&path) {
+                    let path = path.to_string_lossy();
+                    eprintln!("{path}: {err}")
+                }
+            }
+        }
     }
 
     let uat_server = Server::new(Ipv4Addr::LOCALHOST)?;
