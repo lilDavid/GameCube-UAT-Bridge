@@ -18,10 +18,18 @@ const GAME_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 #[cfg(target_os = "windows")]
 fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
     println!("Connecting to Dolphin...");
+    let mut last_message = None;
     let result = loop {
         match DolphinConnection::new() {
             Ok(dolphin) => break Box::new(dolphin),
-            Err(err) => {eprintln!("{}", err); thread::sleep(CONNECTION_ATTEMPT_INTERVAL)},
+            Err(err) => {
+                let message = err.to_string();
+                if last_message.as_ref() != Some(&message) {
+                    last_message = Some(message);
+                    eprintln!("{}", err);
+                }
+                thread::sleep(CONNECTION_ATTEMPT_INTERVAL)
+            },
         }
     };
     println!("Connected");
@@ -30,15 +38,23 @@ fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
 
 #[cfg(not(target_os = "windows"))]
 fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
-    panic!()
+    panic!("Dolphin connection is only supported on Windows")
 }
 
 fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnection> {
     println!("Connecting to Nintendont at {}...", address);
+    let mut last_message = None;
     let result = loop {
         match NintendontConnection::new(address) {
             Ok(nintendont) => break Box::new(nintendont),
-            Err(err) => {eprintln!("{}", err); thread::sleep(CONNECTION_ATTEMPT_INTERVAL)},
+            Err(err) => {
+                let message = err.to_string();
+                if last_message.as_ref() != Some(&message) {
+                    last_message = Some(message);
+                    eprintln!("{}", err);
+                }
+                thread::sleep(CONNECTION_ATTEMPT_INTERVAL)
+            },
         }
     };
     println!("Connected");
