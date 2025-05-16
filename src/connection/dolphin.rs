@@ -21,12 +21,6 @@ impl DolphinConnection {
         let dolphin = Dolphin::new().map_err(|process_error| io::Error::new(io::ErrorKind::NotFound, process_error))?;
         Ok(Self { dolphin })
     }
-
-    #[cfg(not(target_os = "windows"))]
-    #[allow(dead_code)]
-    pub fn new() -> Result<Self, io::Error> {
-        Err(io::Error::new(io::ErrorKind::ConnectionRefused, "Dolphin is not supported on this platform"))
-    }
 }
 
 #[cfg(target_os = "windows")]
