@@ -33,12 +33,22 @@ impl TryFrom<&JsonValue> for ClientCommand {
     fn try_from(value: &JsonValue) -> Result<Self, Self::Error> {
         if let JsonValue::Object(obj) = value {
             match obj["cmd"].as_str() {
-                Some("Sync") => Ok(Self::Sync(SyncCommand::with_slot(obj["slot"].as_str().map(String::from)))),
+                Some("Sync") => Ok(Self::Sync(SyncCommand::with_slot(
+                    obj["slot"].as_str().map(String::from),
+                ))),
                 Some(s) => Err(ErrorReplyCommand::new(s, ErrorReplyReason::UnknownCmd)),
-                None => Err(ErrorReplyCommand::with_description("", ErrorReplyReason::MissingArgument, Some("missing cmd"))),
+                None => Err(ErrorReplyCommand::with_description(
+                    "",
+                    ErrorReplyReason::MissingArgument,
+                    Some("missing cmd"),
+                )),
             }
         } else {
-            Err(ErrorReplyCommand::with_description("", ErrorReplyReason::BadValue, Some("expected object")))
+            Err(ErrorReplyCommand::with_description(
+                "",
+                ErrorReplyReason::BadValue,
+                Some("expected object"),
+            ))
         }
     }
 }
@@ -56,7 +66,12 @@ impl InfoCommand {
         Self::with_features(name, version, None, None)
     }
 
-    pub fn with_features(name: Option<&str>, version: Option<&str>, features: Option<&[&str]>, slots: Option<&[&str]>) -> Self {
+    pub fn with_features(
+        name: Option<&str>,
+        version: Option<&str>,
+        features: Option<&[&str]>,
+        slots: Option<&[&str]>,
+    ) -> Self {
         Self {
             name: name.map(str::to_owned),
             version: version.map(str::to_owned),
@@ -68,7 +83,7 @@ impl InfoCommand {
 
 impl Into<JsonValue> for InfoCommand {
     fn into(self) -> JsonValue {
-        let mut cmd = object!{
+        let mut cmd = object! {
             cmd: "Info",
             name: self.name,
             version: self.version,
@@ -107,7 +122,7 @@ impl VarCommand {
 
 impl Into<JsonValue> for VarCommand {
     fn into(self) -> JsonValue {
-        let mut cmd = object!{
+        let mut cmd = object! {
             cmd: "Var",
             name: self.name,
             value: self.value,
@@ -152,11 +167,20 @@ impl ErrorReplyCommand {
         Self::with_argument_and_description(name, None, reason, None)
     }
 
-    pub fn with_description(name: &str, reason: ErrorReplyReason, description: Option<&str>) -> Self {
+    pub fn with_description(
+        name: &str,
+        reason: ErrorReplyReason,
+        description: Option<&str>,
+    ) -> Self {
         Self::with_argument_and_description(name, None, reason, description)
     }
 
-    pub fn with_argument_and_description(name: &str, argument: Option<&str>, reason: ErrorReplyReason, description: Option<&str>) -> Self {
+    pub fn with_argument_and_description(
+        name: &str,
+        argument: Option<&str>,
+        reason: ErrorReplyReason,
+        description: Option<&str>,
+    ) -> Self {
         Self {
             name: name.to_owned(),
             argument: argument.map(str::to_owned),
@@ -168,12 +192,13 @@ impl ErrorReplyCommand {
 
 impl Into<JsonValue> for ErrorReplyCommand {
     fn into(self) -> JsonValue {
-        let mut value = object!{
+        let mut value = object! {
             name: self.name,
             reason: self.reason.to_string(),
         };
         self.argument.map(|arg| value["argument"] = arg.into());
-        self.description.map(|desc| value["description"] = desc.into());
+        self.description
+            .map(|desc| value["description"] = desc.into());
         value
     }
 }
@@ -190,7 +215,12 @@ impl ServerCommand {
     pub fn info(name: Option<&str>, version: Option<&str>) -> Self {
         Self::Info(InfoCommand::new(name, version))
     }
-    pub fn info_with_features(name: Option<&str>, version: Option<&str>, features: Option<&[&str]>, slots: Option<&[&str]>) -> Self {
+    pub fn info_with_features(
+        name: Option<&str>,
+        version: Option<&str>,
+        features: Option<&[&str]>,
+        slots: Option<&[&str]>,
+    ) -> Self {
         Self::Info(InfoCommand::with_features(name, version, features, slots))
     }
 

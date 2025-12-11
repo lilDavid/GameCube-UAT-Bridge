@@ -2,11 +2,25 @@ mod connection;
 mod lua;
 mod uat;
 
-use std::{env::{self, VarError}, error::Error, io::ErrorKind, net::{IpAddr, Ipv4Addr}, path::PathBuf, str::FromStr, sync::mpsc::{channel, TryRecvError}, thread::{self}, time::Duration};
+use std::{
+    env::{self, VarError},
+    error::Error,
+    io::ErrorKind,
+    net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
+    str::FromStr,
+    sync::mpsc::{channel, TryRecvError},
+    thread::{self},
+    time::Duration,
+};
 
 use connection::GameCubeConnection;
-use lua::{VerificationError, LuaInterface};
-use uat::{command::{ClientCommand, ServerCommand}, variable::VariableStore, Client, Server};
+use lua::{LuaInterface, VerificationError};
+use uat::{
+    command::{ClientCommand, ServerCommand},
+    variable::VariableStore,
+    Client, Server,
+};
 
 #[cfg(target_os = "windows")]
 use crate::connection::dolphin::DolphinConnection;
@@ -29,7 +43,7 @@ fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
                     eprintln!("{}", err);
                 }
                 thread::sleep(CONNECTION_ATTEMPT_INTERVAL)
-            },
+            }
         }
     };
     println!("Connected");
@@ -54,7 +68,7 @@ fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnection> {
                     eprintln!("{}", err);
                 }
                 thread::sleep(CONNECTION_ATTEMPT_INTERVAL)
-            },
+            }
         }
     };
     println!("Connected");
@@ -63,30 +77,34 @@ fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnection> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut argv = env::args();
-    argv.next();  // Consume argv[0]
+    argv.next(); // Consume argv[0]
 
     let target = argv.next().ok_or("Need IP Address or to specify Dolphin")?;
 
-    let connection_factory: Box<dyn Fn() -> Box<dyn GameCubeConnection>> = if target.to_lowercase() == "dolphin" {
-        if cfg!(target_os = "windows") {
-            Box::new(connect_to_dolphin)
+    let connection_factory: Box<dyn Fn() -> Box<dyn GameCubeConnection>> =
+        if target.to_lowercase() == "dolphin" {
+            if cfg!(target_os = "windows") {
+                Box::new(connect_to_dolphin)
+            } else {
+                Err("Dolphin is not supported on this platform")?
+            }
         } else {
-            Err("Dolphin is not supported on this platform")?
-        }
-    } else {
-        let address = IpAddr::from_str(&target)?;
-        Box::new(move || connect_to_nintendont(address))
-    };
+            let address = IpAddr::from_str(&target)?;
+            Box::new(move || connect_to_nintendont(address))
+        };
 
     let mut search_paths = argv.map(PathBuf::from).collect::<Vec<_>>();
     let key = "GAMECUBE_UAT_BRIDGE_PATH";
     match env::var(key) {
         Ok(value) => {
             search_paths.extend(env::split_paths(&value));
-        },
-        Err(err) => if let VarError::NotPresent = err {} else {
-            eprintln!("Couldn't interpret {key}: {err}");
-        },
+        }
+        Err(err) => {
+            if let VarError::NotPresent = err {
+            } else {
+                eprintln!("Couldn't interpret {key}: {err}");
+            }
+        }
     }
 
     let lua_interface = LuaInterface::new()?;
@@ -99,15 +117,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else if search_path.is_dir() {
             let dir_entries = match search_path.read_dir() {
                 Ok(d) => d,
-                Err(err) => { eprintln!("{err}"); continue }
+                Err(err) => {
+                    eprintln!("{err}");
+                    continue;
+                }
             };
             for entry in dir_entries {
                 let file = match entry {
                     Ok(f) => f,
-                    Err(err) => { eprintln!("{err}"); break }
+                    Err(err) => {
+                        eprintln!("{err}");
+                        break;
+                    }
                 };
                 match file.file_type() {
-                    Ok(t) => if !t.is_file() { continue; }
+                    Ok(t) => {
+                        if !t.is_file() {
+                            continue;
+                        }
+                    }
                     Err(_) => continue,
                 }
                 if !file.file_name().to_string_lossy().ends_with(".lua") {
@@ -124,11 +152,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let uat_server = Server::new(Ipv4Addr::LOCALHOST)?;
     let (client_sender, client_receiver) = channel();
-    println!("Listening for UAT clients on port {}", uat_server.local_addr()?.port());
+    println!(
+        "Listening for UAT clients on port {}",
+        uat_server.local_addr()?.port()
+    );
     thread::spawn(move || {
         for client in uat_server.accept_clients().filter_map(Result::ok) {
             if let Err(_) = client_sender.send(client) {
-                break
+                break;
             };
         }
         println!("Server closed");
@@ -146,7 +177,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             Err(VerificationError::VerificationError(err)) => {
                 println!("{}", err);
-                println!("Current interface encountered an error while re-verifying, disconnecting.");
+                println!(
+                    "Current interface encountered an error while re-verifying, disconnecting."
+                );
                 lua_interface.disconnect();
             }
         }
@@ -158,11 +191,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!(
                         "Found interface {} for {}",
                         name,
-                        interface.name()
+                        interface
+                            .name()
                             .unwrap_or_else(|_| Some("<invalid>".into()))
                             .unwrap_or_else(|| "<nil>".into())
                     );
-                },
+                }
                 Err(_) => {
                     println!("No interface found for this game");
                     thread::sleep(CONNECTION_ATTEMPT_INTERVAL);
@@ -176,21 +210,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(Err(e)) => {
                 eprintln!("{}", e);
                 println!("Disconnected");
-                continue
+                continue;
             }
             None => {
                 println!("Disconnected");
-                continue
+                continue;
             }
-        }.into_iter()
-            .filter_map(|(k, res)| match res {
-                Ok(v) => Some((k, v)),
-                Err(e) => { eprintln!("{}", e); None },
-            })
-            .filter(|(name, value)| variable_store.update_variable(&name, value.clone()))
-            .inspect(|(name, value)| println!(":{} = {}", name, value))
-            .map(|(name, value)| ServerCommand::var(&name, value))
-            .collect::<Vec<_>>();
+        }
+        .into_iter()
+        .filter_map(|(k, res)| match res {
+            Ok(v) => Some((k, v)),
+            Err(e) => {
+                eprintln!("{}", e);
+                None
+            }
+        })
+        .filter(|(name, value)| variable_store.update_variable(&name, value.clone()))
+        .inspect(|(name, value)| println!(":{} = {}", name, value))
+        .map(|(name, value)| ServerCommand::var(&name, value))
+        .collect::<Vec<_>>();
 
         // FIXME: Operations are entirely skipped if they block, which could be a problem for Sync responses.
         // Unsure how to fix without more threads.
@@ -202,15 +240,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Ok(messages) => {
                     for message in messages {
                         match message {
-                            Ok(ClientCommand::Sync(_)) => if !sent_variables {
-                                replies.extend_from_slice(cache_variables.get_or_insert_with(||
-                                    variable_store.variable_values()
-                                    .map(|(name, value)| ServerCommand::var(name, value.clone()))
-                                    .collect()
-                                ));
-                                sent_variables = true;
-                            },
-                            Err(error_reply) => replies.push(ServerCommand::ErrorReply(error_reply)),
+                            Ok(ClientCommand::Sync(_)) => {
+                                if !sent_variables {
+                                    replies.extend_from_slice(cache_variables.get_or_insert_with(
+                                        || {
+                                            variable_store
+                                                .variable_values()
+                                                .map(|(name, value)| {
+                                                    ServerCommand::var(name, value.clone())
+                                                })
+                                                .collect()
+                                        },
+                                    ));
+                                    sent_variables = true;
+                                }
+                            }
+                            Err(error_reply) => {
+                                replies.push(ServerCommand::ErrorReply(error_reply))
+                            }
                         }
                     }
                 }
@@ -225,7 +272,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 replies.extend_from_slice(&changes);
             }
             if client.connected() && !replies.is_empty() {
-                client.send(&replies).unwrap_or_else(|err| eprintln!("{}", err));
+                client
+                    .send(&replies)
+                    .unwrap_or_else(|err| eprintln!("{}", err));
             }
         }
 
@@ -239,7 +288,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 cache_info = lua_interface.get_info().map(ServerCommand::Info);
             }
             if let Some(info) = &cache_info {
-                new_client.send(&[info.clone()]).or_else(|_| new_client.shutdown()).ok();
+                new_client
+                    .send(&[info.clone()])
+                    .or_else(|_| new_client.shutdown())
+                    .ok();
             } else {
                 break;
             }

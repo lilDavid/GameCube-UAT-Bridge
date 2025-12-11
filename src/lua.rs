@@ -1,13 +1,17 @@
-use std::{cell::RefCell, collections::HashMap, error::Error, fmt::Display, fs, io, mem, ops::Deref, path::Path, rc::Rc};
+use std::{
+    cell::RefCell, collections::HashMap, error::Error, fmt::Display, fs, io, mem, ops::Deref,
+    path::Path, rc::Rc,
+};
 
 use json::JsonValue;
 use mlua::{FromLua, FromLuaMulti, IntoLua, IntoLuaMulti, Lua, Table};
 
-use crate::{connection::{GameCubeConnection, Read}, uat::command::InfoCommand};
-
+use crate::{
+    connection::{GameCubeConnection, Read},
+    uat::command::InfoCommand,
+};
 
 const GCN_BASE_ADDRESS: u32 = 0x80000000;
-
 
 /// Coerce a value to true or false, following Lua semantics:
 /// null, nil, and false are false, and anything else is true.
@@ -24,13 +28,16 @@ fn coerce_boolean(val: &mlua::Value) -> bool {
 }
 
 fn convert_lua_to_string(lua: &Lua, string: &mlua::Value) -> mlua::Result<String> {
-    Ok(lua.coerce_string(string.clone())?
+    Ok(lua
+        .coerce_string(string.clone())?
         .ok_or(mlua::Error::FromLuaConversionError {
             from: string.type_name(),
             to: "JsonValue".into(),
-            message: Some("Key could not be converted to a string".into())
-        })?.to_str()?.deref().to_owned()
-    )
+            message: Some("Key could not be converted to a string".into()),
+        })?
+        .to_str()?
+        .deref()
+        .to_owned())
 }
 
 /// Convert a Lua value into a JSON value
@@ -46,8 +53,11 @@ fn convert_lua_to_json(lua: &Lua, value: &mlua::Value) -> mlua::Result<JsonValue
     } else if let Some(s) = value.as_str() {
         Ok(JsonValue::from(s.deref()))
     } else if let Some(table) = value.as_table() {
-        let int_keys = table.pairs()
-            .map(|result: mlua::Result<(mlua::Value, mlua::Value)>| result.map(|(k, _)| k.as_integer()))
+        let int_keys = table
+            .pairs()
+            .map(|result: mlua::Result<(mlua::Value, mlua::Value)>| {
+                result.map(|(k, _)| k.as_integer())
+            })
             .collect::<mlua::Result<Option<Vec<_>>>>()?;
         let array_keys = if let Some(mut keys) = int_keys {
             keys.sort();
@@ -58,7 +68,12 @@ fn convert_lua_to_json(lua: &Lua, value: &mlua::Value) -> mlua::Result<JsonValue
                 Some(1) => Some(1),
                 Some(_) => None,
             } {
-                iterator.try_fold(start, |prev, next| if next == prev + 1 { Some(next) } else { None }).map(|end| start..end)
+                iterator
+                    .try_fold(
+                        start,
+                        |prev, next| if next == prev + 1 { Some(next) } else { None },
+                    )
+                    .map(|end| start..end)
             } else {
                 None
             }
@@ -67,22 +82,34 @@ fn convert_lua_to_json(lua: &Lua, value: &mlua::Value) -> mlua::Result<JsonValue
         };
         if let Some(keys) = array_keys {
             Ok(JsonValue::Array(
-                keys.map(|i|
-                    table.get(i)
-                        .and_then(|v: mlua::Value| convert_lua_to_json(lua, &v)))
-                        .collect::<mlua::Result<Vec<JsonValue>>>()?
+                keys.map(|i| {
+                    table
+                        .get(i)
+                        .and_then(|v: mlua::Value| convert_lua_to_json(lua, &v))
+                })
+                .collect::<mlua::Result<Vec<JsonValue>>>()?,
             ))
         } else {
             Ok(JsonValue::from(
-                table.pairs()
-                    .map(|result| result.and_then(|(k, v): (mlua::Value, mlua::Value)|
-                        Ok((convert_lua_to_string(lua, &k)?, convert_lua_to_json(lua, &v)?))
-                    ))
-                    .collect::<mlua::Result<HashMap<String, JsonValue>>>()?
+                table
+                    .pairs()
+                    .map(|result| {
+                        result.and_then(|(k, v): (mlua::Value, mlua::Value)| {
+                            Ok((
+                                convert_lua_to_string(lua, &k)?,
+                                convert_lua_to_json(lua, &v)?,
+                            ))
+                        })
+                    })
+                    .collect::<mlua::Result<HashMap<String, JsonValue>>>()?,
             ))
         }
     } else {
-        Err(mlua::Error::FromLuaConversionError { from: value.type_name(), to: "JsonValue".into(), message: Some("Value cannot be represented in JSON".into()) })
+        Err(mlua::Error::FromLuaConversionError {
+            from: value.type_name(),
+            to: "JsonValue".into(),
+            message: Some("Value cannot be represented in JSON".into()),
+        })
     }
 }
 
@@ -93,10 +120,14 @@ macro_rules! bytes_to_lua {
             Ok(i) => i.into_lua($lua),
             Err(_) => Ok(mlua::Value::Nil),
         }
-    }}
+    }};
 }
 
-fn convert_bytes(lua: &Lua, bytes: Option<Vec<u8>>, ty: &TypeSpecifier) -> mlua::Result<mlua::Value> {
+fn convert_bytes(
+    lua: &Lua,
+    bytes: Option<Vec<u8>>,
+    ty: &TypeSpecifier,
+) -> mlua::Result<mlua::Value> {
     let bytes = match bytes {
         Some(bytes) => bytes,
         None => return Ok(mlua::Value::Nil),
@@ -159,26 +190,42 @@ impl FromLua for TypeSpecifier {
                     "f32" => Ok(Self::F32),
                     "s64" | "i64" => Ok(Self::S64),
                     "f64" => Ok(Self::F64),
-                    _ => Err(mlua::Error::FromLuaConversionError { from: "string", to: "TypeSpecifier".into(), message: None })
+                    _ => Err(mlua::Error::FromLuaConversionError {
+                        from: "string",
+                        to: "TypeSpecifier".into(),
+                        message: None,
+                    }),
                 })
             }
             mlua::Value::Integer(size) => TryInto::<u8>::try_into(size)
-                .map_err(|err| mlua::Error::FromLuaConversionError { from: "integer", to: "u8".into(), message: Some(err.to_string()) })
+                .map_err(|err| mlua::Error::FromLuaConversionError {
+                    from: "integer",
+                    to: "u8".into(),
+                    message: Some(err.to_string()),
+                })
                 .map(Self::Bytes),
-            value => Err(mlua::Error::FromLuaConversionError { from: value.type_name(), to: "TypeSpecifier".into(), message: None }),
+            value => Err(mlua::Error::FromLuaConversionError {
+                from: value.type_name(),
+                to: "TypeSpecifier".into(),
+                message: None,
+            }),
         }
     }
 }
 
-fn read_tuple_from_table(table: mlua::Table, lua: &Lua) -> mlua::Result<(u32, TypeSpecifier, Option<i16>)> {
+fn read_tuple_from_table(
+    table: mlua::Table,
+    lua: &Lua,
+) -> mlua::Result<(u32, TypeSpecifier, Option<i16>)> {
     FromLuaMulti::from_lua_multi(
         {
             let address: mlua::Value = table.get(1)?;
             let type_specifier: mlua::Value = table.get(2)?;
             let offset: mlua::Value = table.get(3)?;
             (address, type_specifier, offset)
-        }.into_lua_multi(lua)?,
-        lua
+        }
+        .into_lua_multi(lua)?,
+        lua,
     )
 }
 
@@ -193,13 +240,16 @@ impl VariableStore {
 
         let store = Self(Rc::clone(&storage));
 
-        table.set("WriteVariable", lua.create_function(
-            move |lua, (_, key, value,): (mlua::Value, mlua::Value, mlua::Value,)| {
-                let key = convert_lua_to_string(lua, &key)?;
-                let value = convert_lua_to_json(lua, &value);
-                Ok(storage.borrow_mut().push((key, value)))
-            }
-        )?)?;
+        table.set(
+            "WriteVariable",
+            lua.create_function(
+                move |lua, (_, key, value): (mlua::Value, mlua::Value, mlua::Value)| {
+                    let key = convert_lua_to_string(lua, &key)?;
+                    let value = convert_lua_to_json(lua, &value);
+                    Ok(storage.borrow_mut().push((key, value)))
+                },
+            )?,
+        )?;
 
         Ok((store, table))
     }
@@ -276,7 +326,10 @@ struct LuaGcnConnection {
 }
 
 impl LuaGcnConnection {
-    fn connect(gamecube: Box<dyn GameCubeConnection>, game_interface: Option<GameInterface>) -> Self {
+    fn connect(
+        gamecube: Box<dyn GameCubeConnection>,
+        game_interface: Option<GameInterface>,
+    ) -> Self {
         Self {
             gamecube_connection: gamecube,
             game_interface,
@@ -297,34 +350,59 @@ impl LuaInterface {
         let game_interfaces = Rc::new(RefCell::new(HashMap::new()));
 
         let script_host = lua.create_table()?;
-        script_host.set("CreateGameInterface", lua.create_function(
-            |lua, (_,): (mlua::Value,)| GameInterface::create_table(lua)
-        )?)?;
+        script_host.set(
+            "CreateGameInterface",
+            lua.create_function(|lua, (_,): (mlua::Value,)| GameInterface::create_table(lua))?,
+        )?;
         let interfaces = Rc::clone(&game_interfaces);
-        script_host.set("AddGameInterface", lua.create_function(
-            move |_, (_, name, value): (mlua::Value, String, GameInterface)| Ok({ interfaces.borrow_mut().insert(name, value); })
-        )?)?;
+        script_host.set(
+            "AddGameInterface",
+            lua.create_function(
+                move |_, (_, name, value): (mlua::Value, String, GameInterface)| {
+                    Ok({
+                        interfaces.borrow_mut().insert(name, value);
+                    })
+                },
+            )?,
+        )?;
         lua.globals().set("ScriptHost", script_host)?;
 
         let gamecube = lua.create_table()?;
         gamecube.set("GameIDAddress", GCN_BASE_ADDRESS)?;
         let connect = Rc::clone(&connection);
-        gamecube.set("ReadSingle", lua.create_function(
-            move |lua, (_, address, type_specifier, offset): (mlua::Value, u32, TypeSpecifier, Option<i16>)| {
-                let connection = connect.borrow();
-                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
-                let read = Read::from_parts(address, type_specifier.size(), offset);
-                let bytes = connection.gamecube_connection.read_single(read)?;
-                let result = convert_bytes(lua, bytes, &type_specifier);
-                Ok(result)
-            }
-        )?)?;
+        gamecube.set(
+            "ReadSingle",
+            lua.create_function(
+                move |lua,
+                      (_, address, type_specifier, offset): (
+                    mlua::Value,
+                    u32,
+                    TypeSpecifier,
+                    Option<i16>,
+                )| {
+                    let connection = connect.borrow();
+                    let connection = connection
+                        .as_ref()
+                        .ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                    let read = Read::from_parts(address, type_specifier.size(), offset);
+                    let bytes = connection.gamecube_connection.read_single(read)?;
+                    let result = convert_bytes(lua, bytes, &type_specifier);
+                    Ok(result)
+                },
+            )?,
+        )?;
         let connect = Rc::clone(&connection);
-        gamecube.set("Read", lua.create_function(
-            move |lua, (_, read_list): (mlua::Value, Vec<Table>)| {
+        gamecube.set(
+            "Read",
+            lua.create_function(move |lua, (_, read_list): (mlua::Value, Vec<Table>)| {
                 let connection = connect.borrow();
-                let connection = connection.as_ref().ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
-                let read_list = read_list.into_iter().map(|table| read_tuple_from_table(table, lua)).collect::<mlua::Result<Vec<_>>>()?;
+                let connection = connection
+                    .as_ref()
+                    .ok_or(io::Error::from(io::ErrorKind::NotConnected))?;
+                let read_list = read_list
+                    .into_iter()
+                    .map(|table| read_tuple_from_table(table, lua))
+                    .collect::<mlua::Result<Vec<_>>>()?;
                 let (read_list, type_specifiers) = {
                     let mut reads = Vec::with_capacity(read_list.len());
                     let mut types = Vec::with_capacity(read_list.len());
@@ -335,11 +413,11 @@ impl LuaInterface {
                     (reads, types)
                 };
                 let byte_arrays = connection.gamecube_connection.read(&read_list)?;
-                Iterator::zip(byte_arrays.into_iter(), type_specifiers.into_iter()).map(|(bytes, type_specifier)| {
-                    convert_bytes(lua, bytes, &type_specifier)
-                }).collect::<mlua::Result<Vec<mlua::Value>>>()
-            }
-        )?)?;
+                Iterator::zip(byte_arrays.into_iter(), type_specifiers.into_iter())
+                    .map(|(bytes, type_specifier)| convert_bytes(lua, bytes, &type_specifier))
+                    .collect::<mlua::Result<Vec<mlua::Value>>>()
+            })?,
+        )?;
         lua.globals().set("GameCube", gamecube)?;
 
         Ok(Self {
@@ -357,20 +435,33 @@ impl LuaInterface {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.connection.borrow().as_ref().and_then(|i| i.game_interface.as_ref()).is_some()
+        self.connection
+            .borrow()
+            .as_ref()
+            .and_then(|i| i.game_interface.as_ref())
+            .is_some()
     }
 
-    pub fn connect(&self, connection: Box<dyn GameCubeConnection>) -> Result<(String, GameInterface), Box<dyn GameCubeConnection>> {
+    pub fn connect(
+        &self,
+        connection: Box<dyn GameCubeConnection>,
+    ) -> Result<(String, GameInterface), Box<dyn GameCubeConnection>> {
         self.disconnect();
 
-        self.connection.borrow_mut().replace(LuaGcnConnection::connect(connection, None) );
+        self.connection
+            .borrow_mut()
+            .replace(LuaGcnConnection::connect(connection, None));
 
         let interfaces = self.game_interfaces.borrow();
-        let interface = interfaces.iter()
+        let interface = interfaces
+            .iter()
             .filter_map(|(name, interface)| match interface.verify() {
                 Ok(true) => Some((name, interface)),
                 Ok(false) => None,
-                Err(e) => { eprintln!("{}", e); None },
+                Err(e) => {
+                    eprintln!("{}", e);
+                    None
+                }
             })
             .next()
             .map(|(k, v)| (k.clone(), v.clone()));
@@ -378,11 +469,18 @@ impl LuaInterface {
         let mut connection = self.connection.borrow_mut();
         match interface {
             Some((name, interface)) => {
-                connection.as_mut().expect("GCN connection was unexpectedly set None").game_interface.replace(interface.clone());
+                connection
+                    .as_mut()
+                    .expect("GCN connection was unexpectedly set None")
+                    .game_interface
+                    .replace(interface.clone());
                 Ok((name, interface))
             }
             None => {
-                let connection = connection.take().expect("GCN connection was unexpectedly set None").gamecube_connection;
+                let connection = connection
+                    .take()
+                    .expect("GCN connection was unexpectedly set None")
+                    .gamecube_connection;
                 Err(connection)
             }
         }
@@ -394,8 +492,10 @@ impl LuaInterface {
 
     pub fn verify_current_game(&self) -> Result<(), VerificationError> {
         let connection = self.connection.borrow();
-        let interface = connection.as_ref()
-            .and_then(|connection| connection.game_interface.as_ref()).ok_or(VerificationError::NotConnected)?;
+        let interface = connection
+            .as_ref()
+            .and_then(|connection| connection.game_interface.as_ref())
+            .ok_or(VerificationError::NotConnected)?;
 
         match interface.verify() {
             Ok(true) => Ok(()),
@@ -405,22 +505,28 @@ impl LuaInterface {
     }
 
     pub fn get_info(&self) -> Option<InfoCommand> {
-        self.connection.borrow().as_ref()
+        self.connection
+            .borrow()
+            .as_ref()
             .and_then(|c| c.game_interface.as_ref())
-            .map(|interface|
+            .map(|interface| {
                 InfoCommand::new(
                     interface.name().unwrap_or(None).as_deref(),
-                    interface.version().unwrap_or(None).as_deref()
+                    interface.version().unwrap_or(None).as_deref(),
                 )
-            )
+            })
     }
 
     pub fn run_game_watcher(&self) -> Option<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>> {
         let connection = self.connection.borrow();
-        let interface = connection.as_ref().and_then(|c| c.game_interface.as_ref())?;
-        Some(VariableStore::new(&self.lua)
-            .and_then(|(store, table)| interface.run_game_watcher(&table).map(|_| store))
-            .map(VariableStore::unwrap))
+        let interface = connection
+            .as_ref()
+            .and_then(|c| c.game_interface.as_ref())?;
+        Some(
+            VariableStore::new(&self.lua)
+                .and_then(|(store, table)| interface.run_game_watcher(&table).map(|_| store))
+                .map(VariableStore::unwrap),
+        )
     }
 }
 
@@ -435,7 +541,9 @@ impl Display for VerificationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VerificationError::NotConnected => "no interface is active".fmt(f),
-            VerificationError::VerificationFailed => "active interface failed to verify current game".fmt(f),
+            VerificationError::VerificationFailed => {
+                "active interface failed to verify current game".fmt(f)
+            }
             VerificationError::VerificationError(err) => {
                 "active interface encountered an error while verifying current game: ".fmt(f)?;
                 err.fmt(f)

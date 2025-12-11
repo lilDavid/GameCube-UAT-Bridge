@@ -1,7 +1,11 @@
-use std::{cell::RefCell, io::{self, Cursor, ErrorKind, Read as _, Write}, mem, net::{IpAddr, TcpStream}};
+use std::{
+    cell::RefCell,
+    io::{self, Cursor, ErrorKind, Read as _, Write},
+    mem,
+    net::{IpAddr, TcpStream},
+};
 
 use super::{GameCubeConnection, Read};
-
 
 #[repr(u8)]
 enum MemoryOperationType {
@@ -18,12 +22,27 @@ struct MemoryOperationHeader {
 }
 
 impl MemoryOperationHeader {
-    pub fn new(operation_type: MemoryOperationType, count: u8, absolute_address_count: u8, keep_alive: bool) -> Self {
-        Self { operation_type, count, absolute_address_count, keep_alive: keep_alive as u8 }
+    pub fn new(
+        operation_type: MemoryOperationType,
+        count: u8,
+        absolute_address_count: u8,
+        keep_alive: bool,
+    ) -> Self {
+        Self {
+            operation_type,
+            count,
+            absolute_address_count,
+            keep_alive: keep_alive as u8,
+        }
     }
 
     pub fn read_commands(count: u8, absolute_address_count: u8) -> Self {
-        Self::new(MemoryOperationType::ReadCommands, count, absolute_address_count, true)
+        Self::new(
+            MemoryOperationType::ReadCommands,
+            count,
+            absolute_address_count,
+            true,
+        )
     }
 
     pub fn request_version() -> Self {
@@ -31,7 +50,12 @@ impl MemoryOperationHeader {
     }
 
     pub fn into_bytes(self) -> Vec<u8> {
-        vec![self.operation_type as u8, self.count, self.absolute_address_count, self.keep_alive]
+        vec![
+            self.operation_type as u8,
+            self.count,
+            self.absolute_address_count,
+            self.keep_alive,
+        ]
     }
 }
 
@@ -46,7 +70,11 @@ impl OperationHeader {
     const HAS_OFFSET: u8 = 0x10;
     const ADDRESS_INDEX_MASK: u8 = 0xF;
 
-    pub fn new(/* has_read: bool, */ /* has_write: bool, */ is_word: bool, has_offset: bool, address_index: u8) -> Self {
+    pub fn new(
+        /* has_read: bool, */ /* has_write: bool, */ is_word: bool,
+        has_offset: bool,
+        address_index: u8,
+    ) -> Self {
         let mut this = Self(0);
         this.set_has_read(true);
         this.set_has_write(false);
@@ -61,8 +89,8 @@ impl OperationHeader {
     }
 
     #[allow(unused)]
-    fn get_bit(&self, bit: u8) -> bool{
-        return self.0 & bit != 0
+    fn get_bit(&self, bit: u8) -> bool {
+        return self.0 & bit != 0;
     }
 
     #[allow(unused)]
@@ -87,7 +115,7 @@ impl OperationHeader {
 
     #[allow(unused)]
     pub fn address_index(&self) -> u8 {
-        return self.0 & Self::ADDRESS_INDEX_MASK
+        return self.0 & Self::ADDRESS_INDEX_MASK;
     }
 
     fn set_bit(&mut self, bit: u8, value: bool) {
@@ -107,14 +135,17 @@ impl OperationHeader {
     }
 
     pub fn set_is_word(&mut self, is_word: bool) {
-        self.set_bit(Self::IS_WORD, is_word); }
+        self.set_bit(Self::IS_WORD, is_word);
+    }
 
     pub fn set_has_offset(&mut self, has_offset: bool) {
         self.set_bit(Self::HAS_OFFSET, has_offset);
     }
 
     pub fn set_address_index(&mut self, address_index: u8) {
-        if address_index & !Self::ADDRESS_INDEX_MASK != 0 { panic!("invalid address index: {}", address_index) }
+        if address_index & !Self::ADDRESS_INDEX_MASK != 0 {
+            panic!("invalid address index: {}", address_index)
+        }
         self.0 &= !Self::ADDRESS_INDEX_MASK;
         self.0 |= address_index;
     }
@@ -129,21 +160,38 @@ fn write_to_socket(socket: &mut TcpStream, data: &[u8]) -> Result<Vec<u8>, io::E
 }
 
 pub struct NitendontConnectionInfo {
-    #[allow(unused)] protocol_version: u32,
+    #[allow(unused)]
+    protocol_version: u32,
     max_input_bytes: u32,
-    #[allow(unused)] max_output_bytes: u32,
+    #[allow(unused)]
+    max_output_bytes: u32,
     max_addresses: u32,
 }
 
 impl NitendontConnectionInfo {
     fn get(socket: &mut TcpStream) -> Result<Self, io::Error> {
-        let mut cursor = Cursor::new(write_to_socket(socket, &MemoryOperationHeader::request_version().into_bytes())?);
+        let mut cursor = Cursor::new(write_to_socket(
+            socket,
+            &MemoryOperationHeader::request_version().into_bytes(),
+        )?);
         let mut bytes = [0u8; 4];
         Ok(Self {
-            protocol_version: { cursor.read_exact(bytes.as_mut_slice())?; u32::from_be_bytes(bytes) },
-            max_input_bytes: { cursor.read_exact(bytes.as_mut_slice())?; u32::from_be_bytes(bytes) },
-            max_output_bytes: { cursor.read_exact(bytes.as_mut_slice())?; u32::from_be_bytes(bytes) },
-            max_addresses: { cursor.read_exact(bytes.as_mut_slice())?; u32::from_be_bytes(bytes) },
+            protocol_version: {
+                cursor.read_exact(bytes.as_mut_slice())?;
+                u32::from_be_bytes(bytes)
+            },
+            max_input_bytes: {
+                cursor.read_exact(bytes.as_mut_slice())?;
+                u32::from_be_bytes(bytes)
+            },
+            max_output_bytes: {
+                cursor.read_exact(bytes.as_mut_slice())?;
+                u32::from_be_bytes(bytes)
+            },
+            max_addresses: {
+                cursor.read_exact(bytes.as_mut_slice())?;
+                u32::from_be_bytes(bytes)
+            },
         })
     }
 }
@@ -159,7 +207,10 @@ impl NintendontConnection {
     pub fn new(ip_addr: IpAddr) -> io::Result<Self> {
         let socket = RefCell::new(TcpStream::connect((ip_addr, Self::PORT))?);
         let connection_info = NitendontConnectionInfo::get(&mut socket.borrow_mut())?;
-        Ok(Self {socket, connection_info})
+        Ok(Self {
+            socket,
+            connection_info,
+        })
     }
 }
 
@@ -180,18 +231,26 @@ impl GameCubeConnection for NintendontConnection {
                 match read {
                     Some(Read::Direct { address, size }) => {
                         result_info.push((address, size));
-                        cursor.write(&[OperationHeader::new(false, false, index).as_byte(), *size])?;
+                        cursor
+                            .write(&[OperationHeader::new(false, false, index).as_byte(), *size])?;
                     }
-                    Some(Read::Indirect { address, offset, size }) => {
+                    Some(Read::Indirect {
+                        address,
+                        offset,
+                        size,
+                    }) => {
                         result_info.push((address, size));
-                        cursor.write(&[OperationHeader::new(false, true, index).as_byte(), *size])?;
+                        cursor
+                            .write(&[OperationHeader::new(false, true, index).as_byte(), *size])?;
                         cursor.write(&offset.to_be_bytes())?;
                     }
                     None => {}
                 }
                 if read.is_none() {
                     true
-                } else if mem::size_of::<u32>() * result_info.len() + cursor.position() as usize > self.connection_info.max_input_bytes as usize {
+                } else if mem::size_of::<u32>() * result_info.len() + cursor.position() as usize
+                    > self.connection_info.max_input_bytes as usize
+                {
                     // Rollback and send
                     result_info.pop();
                     cursor.set_position(current_position);
@@ -204,7 +263,9 @@ impl GameCubeConnection for NintendontConnection {
             if send {
                 let address_count = result_info.len() as u8;
                 if address_count != 0 {
-                    let mut data = MemoryOperationHeader::read_commands(address_count, address_count).into_bytes();
+                    let mut data =
+                        MemoryOperationHeader::read_commands(address_count, address_count)
+                            .into_bytes();
                     for address in &result_info {
                         data.extend_from_slice(&address.0.to_be_bytes());
                     }
@@ -216,7 +277,8 @@ impl GameCubeConnection for NintendontConnection {
                         return Err(io::Error::new(ErrorKind::InvalidData, "received no bytes"));
                     }
 
-                    let mut data = Cursor::new(result.split_off(((address_count - 1) / 8 + 1) as usize));
+                    let mut data =
+                        Cursor::new(result.split_off(((address_count - 1) / 8 + 1) as usize));
                     let success_bytes = result;
                     for i in 0..result_info.len() {
                         let index = i / 8;

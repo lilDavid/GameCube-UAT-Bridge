@@ -3,11 +3,10 @@ pub mod nintendont;
 
 use std::io;
 
-
 #[derive(Clone, Debug)]
 pub enum Read {
     Direct { address: u32, size: u8 },
-    Indirect { address: u32, offset: i16, size: u8 }
+    Indirect { address: u32, offset: i16, size: u8 },
 }
 
 impl Read {
@@ -16,7 +15,11 @@ impl Read {
     }
 
     pub fn pointer(address: u32, offset: i16, size: u8) -> Self {
-        Self::Indirect { address, offset, size }
+        Self::Indirect {
+            address,
+            offset,
+            size,
+        }
     }
 
     pub fn from_parts(address: u32, size: u8, offset: Option<i16>) -> Self {
