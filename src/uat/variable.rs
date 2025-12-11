@@ -1,31 +1,9 @@
-use std::{borrow::Borrow, collections::HashMap, error::Error, fmt::Display};
+use std::{borrow::Borrow, collections::HashMap};
 
 use json::JsonValue;
 
 #[derive(Debug, Clone)]
 pub struct VariableStore(HashMap<String, JsonValue>);
-
-#[derive(Debug)]
-pub struct VariableRegisterError;
-
-impl Display for VariableRegisterError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Variable already registered")
-    }
-}
-
-impl Error for VariableRegisterError {}
-
-#[derive(Debug)]
-pub struct VariableUpdateError;
-
-impl Display for VariableUpdateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Variable not registered")
-    }
-}
-
-impl Error for VariableUpdateError {}
 
 impl VariableStore {
     pub fn new() -> Self {

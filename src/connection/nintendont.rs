@@ -63,6 +63,7 @@ impl MemoryOperationHeader {
 #[derive(Clone, Copy, Debug)]
 struct OperationHeader(u8);
 
+#[allow(unused)]
 impl OperationHeader {
     const HAS_READ: u8 = 0x80;
     const HAS_WRITE: u8 = 0x40;
@@ -88,32 +89,26 @@ impl OperationHeader {
         self.0
     }
 
-    #[allow(unused)]
     fn get_bit(&self, bit: u8) -> bool {
         return self.0 & bit != 0;
     }
 
-    #[allow(unused)]
     pub fn has_read(&self) -> bool {
         self.get_bit(Self::HAS_READ)
     }
 
-    #[allow(unused)]
     pub fn has_write(&self) -> bool {
         self.get_bit(Self::HAS_WRITE)
     }
 
-    #[allow(unused)]
     pub fn is_word(&self) -> bool {
         self.get_bit(Self::IS_WORD)
     }
 
-    #[allow(unused)]
     pub fn has_offset(&self) -> bool {
         self.get_bit(Self::HAS_OFFSET)
     }
 
-    #[allow(unused)]
     pub fn address_index(&self) -> u8 {
         return self.0 & Self::ADDRESS_INDEX_MASK;
     }
@@ -159,11 +154,10 @@ fn write_to_socket(socket: &mut TcpStream, data: &[u8]) -> Result<Vec<u8>, io::E
     Ok(result)
 }
 
+#[allow(unused)]
 pub struct NitendontConnectionInfo {
-    #[allow(unused)]
     protocol_version: u32,
     max_input_bytes: u32,
-    #[allow(unused)]
     max_output_bytes: u32,
     max_addresses: u32,
 }

@@ -4,13 +4,13 @@ use json::{object, JsonValue};
 
 use crate::uat::UAT_PROTOCOL_VERSION;
 
-#[allow(dead_code)]
+#[allow(unused)]
 #[derive(Debug)]
 pub struct SyncCommand {
     slot: Option<String>,
 }
 
-#[allow(dead_code)]
+#[allow(unused)]
 impl SyncCommand {
     pub fn new() -> Self {
         Self::with_slot(None)
@@ -21,7 +21,7 @@ impl SyncCommand {
     }
 }
 
-#[allow(dead_code)]
+#[allow(unused)]
 #[derive(Debug)]
 pub enum ClientCommand {
     Sync(SyncCommand),
@@ -134,7 +134,7 @@ impl Into<JsonValue> for VarCommand {
     }
 }
 
-#[allow(dead_code)]
+#[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorReplyReason {
     UnknownCmd,
@@ -210,7 +210,7 @@ pub enum ServerCommand {
     ErrorReply(ErrorReplyCommand),
 }
 
-#[allow(dead_code)]
+#[allow(unused)]
 impl ServerCommand {
     pub fn info(name: Option<&str>, version: Option<&str>) -> Self {
         Self::Info(InfoCommand::new(name, version))

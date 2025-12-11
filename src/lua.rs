@@ -284,12 +284,12 @@ impl GameInterface {
         self.0.get("Version")
     }
 
-    #[allow(dead_code)]
+    #[allow(unused)]
     pub fn features(&self) -> mlua::Result<Option<Vec<String>>> {
         self.0.get("Features")
     }
 
-    #[allow(dead_code)]
+    #[allow(unused)]
     pub fn slots(&self) -> mlua::Result<Option<Vec<String>>> {
         self.0.get("Slots")
     }
