@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build:
@@ -12,18 +12,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: 'ubuntu-latest'
-            name: 'Linux'
-            version: 'linux'
-          - os: 'macos-latest'
-            name: 'macOS ARM'
-            version: 'macos-arm'
-          - os: 'macos-13'
-            name: 'macOS x86-64'
-            version: 'macos-x64'
-          - os: 'windows-latest'
-            name: 'Windows'
-            version: 'windows'
+          - os: "ubuntu-latest"
+            name: "Linux"
+            version: "linux"
+          - os: "macos-latest"
+            name: "macOS ARM"
+            version: "macos-arm"
+          - os: "macos-15-intel"
+            name: "macOS x86-64"
+            version: "macos-x64"
+          - os: "windows-latest"
+            name: "Windows"
+            version: "windows"
 
     runs-on: ${{ matrix.os }}
 
