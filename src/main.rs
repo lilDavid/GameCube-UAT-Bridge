@@ -195,13 +195,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let changes = match lua_interface.run_game_watcher() {
-            Some(Ok(updates)) => updates,
-            Some(Err(e)) => {
+            Ok(updates) => updates,
+            Err(e) => {
                 eprintln!("{}", e);
-                println!("Disconnected");
-                continue;
-            }
-            None => {
                 println!("Disconnected");
                 continue;
             }

@@ -517,16 +517,18 @@ impl LuaInterface {
             })
     }
 
-    pub fn run_game_watcher(&self) -> Option<mlua::Result<Vec<(String, mlua::Result<JsonValue>)>>> {
+    pub fn run_game_watcher(
+        &self,
+    ) -> Result<impl Iterator<Item = (String, mlua::Result<JsonValue>)>, GameWatcherError> {
         let connection = self.connection.borrow();
         let interface = connection
             .as_ref()
-            .and_then(|c| c.game_interface.as_ref())?;
-        Some(
-            VariableStore::new(&self.lua)
-                .and_then(|(store, table)| interface.run_game_watcher(&table).map(|_| store))
-                .map(VariableStore::unwrap),
-        )
+            .and_then(|c| c.game_interface.as_ref())
+            .ok_or(GameWatcherError::NotConnected)?;
+
+        let (store, table) = VariableStore::new(&self.lua)?;
+        interface.run_game_watcher(&table)?;
+        Ok(store.unwrap().into_iter())
     }
 }
 
@@ -540,11 +542,9 @@ pub enum VerificationError {
 impl Display for VerificationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VerificationError::NotConnected => "no interface is active".fmt(f),
-            VerificationError::VerificationFailed => {
-                "active interface failed to verify current game".fmt(f)
-            }
-            VerificationError::VerificationError(err) => {
+            Self::NotConnected => "no interface is active".fmt(f),
+            Self::VerificationFailed => "active interface failed to verify current game".fmt(f),
+            Self::VerificationError(err) => {
                 "active interface encountered an error while verifying current game: ".fmt(f)?;
                 err.fmt(f)
             }
@@ -553,3 +553,29 @@ impl Display for VerificationError {
 }
 
 impl Error for VerificationError {}
+
+#[derive(Debug, Clone)]
+pub enum GameWatcherError {
+    NotConnected,
+    WatcherError(mlua::Error),
+}
+
+impl Display for GameWatcherError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotConnected => "no interface is active".fmt(f),
+            Self::WatcherError(err) => {
+                "active interface encountered an error while watching game: ".fmt(f)?;
+                err.fmt(f)
+            }
+        }
+    }
+}
+
+impl From<mlua::Error> for GameWatcherError {
+    fn from(err: mlua::Error) -> Self {
+        Self::WatcherError(err)
+    }
+}
+
+impl Error for GameWatcherError {}
