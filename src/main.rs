@@ -22,14 +22,12 @@ use uat::{
     Client, Server,
 };
 
-#[cfg(target_os = "windows")]
 use crate::connection::dolphin::DolphinConnection;
 use crate::connection::nintendont::NintendontConnection;
 
 const CONNECTION_ATTEMPT_INTERVAL: Duration = Duration::from_secs(5);
 const GAME_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
-#[cfg(target_os = "windows")]
 fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
     println!("Connecting to Dolphin...");
     let mut last_message = None;
@@ -48,11 +46,6 @@ fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
     };
     println!("Connected");
     result
-}
-
-#[cfg(not(target_os = "windows"))]
-fn connect_to_dolphin() -> Box<dyn GameCubeConnection> {
-    panic!("Dolphin connection is only supported on Windows")
 }
 
 fn connect_to_nintendont(address: IpAddr) -> Box<dyn GameCubeConnection> {
@@ -83,11 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let connection_factory: Box<dyn Fn() -> Box<dyn GameCubeConnection>> =
         if target.to_lowercase() == "dolphin" {
-            if cfg!(target_os = "windows") {
-                Box::new(connect_to_dolphin)
-            } else {
-                Err("Dolphin is not supported on this platform")?
-            }
+            Box::new(connect_to_dolphin)
         } else {
             let address = IpAddr::from_str(&target)?;
             Box::new(move || connect_to_nintendont(address))
