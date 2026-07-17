@@ -3,6 +3,7 @@ mod lua;
 mod uat;
 
 use std::{
+    cell::LazyCell,
     env::{self, VarError},
     error::Error,
     io::ErrorKind,
@@ -217,7 +218,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // FIXME: Operations are entirely skipped if they block, which could be a problem for Sync responses.
         // Unsure how to fix without more threads.
-        let mut cache_variables: Option<Vec<ServerCommand>> = None;
+        let variable_packet = LazyCell::new(|| {
+            variable_store
+                .variable_values()
+                .map(|(name, value)| ServerCommand::var(name, value.clone()))
+                .collect::<Vec<_>>()
+        });
         for client in &mut clients {
             let mut replies = Vec::new();
             let mut sent_variables = false;
@@ -227,16 +233,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         match message {
                             Ok(ClientCommand::Sync(_)) => {
                                 if !sent_variables {
-                                    replies.extend_from_slice(cache_variables.get_or_insert_with(
-                                        || {
-                                            variable_store
-                                                .variable_values()
-                                                .map(|(name, value)| {
-                                                    ServerCommand::var(name, value.clone())
-                                                })
-                                                .collect()
-                                        },
-                                    ));
+                                    replies.extend_from_slice(&variable_packet);
                                     sent_variables = true;
                                 }
                             }
